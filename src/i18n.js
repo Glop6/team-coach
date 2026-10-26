@@ -1,5 +1,18 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Editar nota": "Edit note",
+  "Editada por {p}, {d}": "Edited by {p}, {d}",
+  "La nota no puede quedar vacía.": "The note can't be empty.",
+  "No tienes permiso para editar esta nota.": "You don't have permission to edit this note.",
+  "Nota actualizada": "Note updated",
+  "Editar nota sobre {n}": "Edit note about {n}",
+  "Queda registrado quién la editó y cuándo; Gus puede ver el texto anterior.": "Who edited it and when is logged; Gus can see the previous text.",
+  "Guardar cambios": "Save changes",
+  "Cuenta como pendiente porque estás verificando el mes completo.": "Counts as pending because you're checking the full month.",
+  "mes completo": "full month",
+  "Mes completo: los días sin sus horas cuentan como pendientes aunque todavía no venzan.": "Full month: days without their hours count as pending even if they're not due yet.",
+  "Para el cierre de mes: cuenta todos los días del mes, también los que todavía no vencen.": "For month-end close: counts every day of the month, including days not due yet.",
+  "Verificar mes completo": "Check full month",
   "Listo, la contraseña quedó probada. Envíale esto:": "Done, the password was tested. Send them this:",
   "Contraseña copiada": "Password copied",
   "Copiar contraseña": "Copy password",
