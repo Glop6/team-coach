@@ -196,7 +196,7 @@ function Login({ api, onLang }) {
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true); setErr("");
-    try { await api.signIn(email.trim(), pw); } catch (x) { setErr(t(x.message)); }
+    try { await api.signIn(email.trim().toLowerCase(), pw.trim()); } catch (x) { setErr(t(x.message)); }
     setBusy(false);
   };
   return html`<main class="login">
@@ -1395,15 +1395,17 @@ function CredModal({ person, profile, onClose }) {
   const run = async (e) => {
     e.preventDefault(); setBusy(true);
     try {
-      if (profile) await api.fn("reset_password", { user_id: profile.id, password: pw });
-      else await api.fn("create_user", { email, password: pw, person_id: person.id });
+      if (profile) await api.fn("reset_password", { user_id: profile.id, password: pw.trim() });
+      else await api.fn("create_user", { email: email.trim(), password: pw.trim(), person_id: person.id });
       setDone(true); reload();
     } catch (x) { toast(x.message, "bad"); }
     setBusy(false);
   };
   const msg = t("Hola {n}, ya tienes acceso a Team Coach.\nEnlace: {u}\nUsuario: {e}\nContraseña: {p}\nSi quieres, puedes cambiarla desde adentro.", { n: firstName(person.full_name), u: location.origin + location.pathname, e: email, p: pw });
   return html`<${Modal} title=${(profile ? t("Nueva contraseña para {n}", { n: firstName(person.full_name) }) : t("Acceso para {n}", { n: firstName(person.full_name) }))} onClose=${onClose}>
-    ${done ? html`<div class="stack"><p>${t("Listo. Envíale esto:")}</p><pre class="cred">${msg}</pre>
+    ${done ? html`<div class="stack"><p>${t("Listo, la contraseña quedó probada. Envíale esto:")}</p><pre class="cred">${msg}</pre>
+      <div class="row"><label class="grow">${t("Contraseña")}<input readonly value=${pw} onFocus=${(e) => e.target.select()} /></label>
+        <button type="button" onClick=${() => { navigator.clipboard?.writeText(pw); toast(t("Contraseña copiada")); }}>${t("Copiar contraseña")}</button></div>
       <div class="row end"><button onClick=${() => { navigator.clipboard?.writeText(msg); toast(t("Copiado")); }}>${t("Copiar mensaje")}</button><button class="primary" onClick=${onClose}>${t("Cerrar")}</button></div></div>`
     : html`<form class="stack" onSubmit=${run}>
       <label>${t("Correo")}${profile ? html`<input value=${email} disabled />` : html`<input type="email" required value=${email} onInput=${(e) => setEmail(e.target.value)} />`}</label>

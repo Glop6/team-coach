@@ -496,6 +496,17 @@ async function notify(admin: DB, reviewId: string, userId: string) {
   return { emailed: true };
 }
 
+// Comprueba que el correo y la contraseña realmente permiten entrar (devuelve el error o null)
+async function probarLogin(email: string, password: string): Promise<string | null> {
+  const anon = Deno.env.get("SUPABASE_ANON_KEY");
+  if (!anon) return null;
+  const c = createClient(SUPABASE_URL, anon, { auth: { persistSession: false, autoRefreshToken: false } });
+  const { data, error } = await c.auth.signInWithPassword({ email, password });
+  if (error) return error.message;
+  if (data.session) await c.auth.signOut().catch(() => {});
+  return null;
+}
+
 // ---------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -526,7 +537,7 @@ Deno.serve(async (req) => {
     if (action === "ideas") return json(await ideas(db, body.person_id, body.focus, body.lang));
 
     if (action === "create_user" || action === "reset_password") {
-      const password = String(body.password ?? "");
+      const password = String(body.password ?? "").trim();
       if (password.length < 8) return json({ error: "La contraseña debe tener al menos 8 caracteres." }, 400);
       if (action === "create_user") {
         const email = String(body.email ?? "").trim().toLowerCase();
@@ -535,11 +546,15 @@ Deno.serve(async (req) => {
         if (error) return json({ error: error.message }, 400);
         await admin.from("profiles").upsert({ id: data.user.id, email, role: "lead", person_id: body.person_id ?? null, must_change_password: false });
         if (body.person_id) await admin.from("people").update({ email }).eq("id", body.person_id);
-        return json({ ok: true, user_id: data.user.id });
+        const check = await probarLogin(email, password);
+        if (check) return json({ error: `Se creó el usuario, pero la contraseña no funciona al entrar: ${check}. Usa "Nueva contraseña".` }, 500);
+        return json({ ok: true, user_id: data.user.id, verified: true });
       } else {
-        const { error } = await admin.auth.admin.updateUserById(body.user_id, { password });
+        const { data: upd, error } = await admin.auth.admin.updateUserById(body.user_id, { password, email_confirm: true });
         if (error) return json({ error: error.message }, 400);
-        return json({ ok: true });
+        const check = upd?.user?.email ? await probarLogin(upd.user.email, password) : null;
+        if (check) return json({ error: `La contraseña no funciona al entrar: ${check}` }, 500);
+        return json({ ok: true, verified: true });
       }
     }
     return json({ error: `Acción desconocida: ${action}` }, 400);

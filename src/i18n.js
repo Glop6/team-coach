@@ -1,5 +1,8 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Listo, la contraseña quedó probada. Envíale esto:": "Done, the password was tested. Send them this:",
+  "Contraseña copiada": "Password copied",
+  "Copiar contraseña": "Copy password",
   "{n} nacionales + 1 regional (de {r} opciones)": "{n} national + 1 regional (out of {r} options)",
   // Cambio 13–15 (Horas, Reglas, Feriados)
   "hace un momento": "just now",
