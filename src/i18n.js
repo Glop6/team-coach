@@ -1,5 +1,10 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Cuenta como pendiente porque estás verificando el mes completo.": "Counts as pending because you're checking the full month.",
+  "mes completo": "full month",
+  "Mes completo: los días sin sus horas cuentan como pendientes aunque todavía no venzan.": "Full month: days without their hours count as pending even if they're not due yet.",
+  "Para el cierre de mes: cuenta todos los días del mes, también los que todavía no vencen.": "For month-end close: counts every day of the month, including days not due yet.",
+  "Verificar mes completo": "Check full month",
   "Listo, la contraseña quedó probada. Envíale esto:": "Done, the password was tested. Send them this:",
   "Contraseña copiada": "Password copied",
   "Copiar contraseña": "Copy password",

@@ -616,3 +616,4 @@ button.link + button.link { margin-left: 0.8rem; }
 .hb-fp { table-layout: fixed; }
 .hb-fp th:first-child { width: 32%; }
 .hb-fp th:last-child { width: 170px; }
+.hb-full { color: var(--primary); font-weight: 600; }

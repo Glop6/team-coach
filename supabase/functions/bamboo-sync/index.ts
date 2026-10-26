@@ -488,11 +488,14 @@ export function alcance(empleados: any[], yo: string, rules: Rules, hoy: string)
   return { equipo, yoEmp: todos.get(yo) ?? empleados.find((e) => String(e.id) === yo) ?? null };
 }
 
-/** Días a revisar: desde el 1 del mes anterior hasta ayer (hora local). */
+/** Días a revisar: desde el 1 del mes anterior hasta el fin del mes en curso (hora local).
+ *  Los días que todavía no vencen quedan "en plazo"; así se puede verificar el mes completo
+ *  cuando la gente registra por adelantado (por ejemplo, el 23 o 25 de cada mes). */
 export function rango(hoy: string) {
   const y = Number(hoy.slice(0, 4)), m = Number(hoy.slice(5, 7));
   const ini = m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, "0")}-01`;
-  const fin = addDays(hoy, -1);
+  const finMes = iso(new Date(Date.UTC(y, m, 0)));
+  const fin = finMes > addDays(hoy, -1) ? finMes : addDays(hoy, -1);
   const dias: string[] = [];
   for (let d = ini; d <= fin; d = addDays(d, 1)) dias.push(d);
   return { ini, fin, dias };

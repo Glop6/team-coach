@@ -88,6 +88,7 @@ function tooltip(d) {
   for (const [p, hh] of Object.entries(d.other_projects ?? {})) partes.push(t("Proyecto adicional (no cuenta): {p} {h}h", { p, h: fmtH(hh) }));
   if (d.note) partes.push(`${t("Comentario")}: “${d.note}”`);
   if (d.ai) partes.push(`IA: ${d.ai}`);
+  if (d.forzado) partes.push(t("Cuenta como pendiente porque estás verificando el mes completo."));
   if (d.before_state) partes.push(t("Antes: {s} ({h}h, visto {f})", { s: t(ESTADO_TXT[d.before_state.state] ?? d.before_state.state), h: fmtH(d.before_state.hours ?? 0), f: d.before_state.seen ? mini(d.before_state.seen) : "—" }));
   return partes.join("\n");
 }
@@ -183,6 +184,7 @@ export function HorasView() {
   const [mes, setMes] = useState(hoy.slice(0, 8) + "01");
   const [q, setQ] = useState("");
   const [soloAlertas, setSoloAlertas] = useState(false);
+  const [mesCompleto, setMesCompleto] = useState(false);
   const ix = useMemo(() => (bamboo?.available ? indexBamboo(bamboo) : null), [bamboo]);
 
   if (!bamboo) return html`<section class="page"><${Busy} /></section>`;
@@ -215,11 +217,12 @@ export function HorasView() {
       </div>
       <div class="row">
         <input class="search" type="search" placeholder=${t("Buscar persona")} value=${q} onInput=${(e) => setQ(e.target.value)} aria-label=${t("Buscar persona")} />
+        ${tab === "mes" && finDeMes(mes) >= hoy && html`<label class="check small" title=${t("Para el cierre de mes: cuenta todos los días del mes, también los que todavía no vencen.")}><input type="checkbox" checked=${mesCompleto} onChange=${(e) => setMesCompleto(e.target.checked)} />${t("Verificar mes completo")}</label>`}
         ${(tab === "semana" || tab === "mes") && html`<label class="check small"><input type="checkbox" checked=${soloAlertas} onChange=${(e) => setSoloAlertas(e.target.checked)} />${t("Solo con alertas")}</label>`}
       </div>
     </div>
     ${tab === "semana" && html`<${Periodo} ix=${ix} gs=${gs} personas=${personas} match=${match} soloAlertas=${soloAlertas} modo="semana" ini=${lunes} setIni=${setLunes} />`}
-    ${tab === "mes" && html`<${Periodo} ix=${ix} gs=${gs} personas=${personas} match=${match} soloAlertas=${soloAlertas} modo="mes" ini=${mes} setIni=${setMes} />`}
+    ${tab === "mes" && html`<${Periodo} ix=${ix} gs=${gs} personas=${personas} match=${match} soloAlertas=${soloAlertas} modo="mes" ini=${mes} setIni=${setMes} completo=${mesCompleto && finDeMes(mes) >= hoy} />`}
     ${tab === "dev" && html`<${Desarrollo} ix=${ix} gs=${gs} match=${match} />`}
     ${tab === "vac" && html`<${Vacaciones} ix=${ix} gs=${gs} match=${match} />`}
   </section>`;
@@ -241,17 +244,32 @@ export function SyncButton() {
   return html`<button class="primary" disabled=${busy} onClick=${run}>${busy ? html`<span class="spinner" aria-hidden="true"></span>${t("Actualizando… (hasta 1 min)")}` : t("Actualizar desde Bamboo")}</button>`;
 }
 
-function diasDelPeriodo(modo, ini, hoy) {
+function diasDelPeriodo(modo, ini, corte) {
   const out = [];
   if (modo === "semana") for (let i = 0; i < 7; i++) out.push(addDays(ini, i));
   else for (let d = ini; d.slice(0, 7) === ini.slice(0, 7); d = addDays(d, 1)) out.push(d);
-  return out.filter((d) => d < hoy || modo === "semana");
+  return out.filter((d) => d <= corte || modo === "semana");
+}
+export const finDeMes = (d) => { const y = Number(d.slice(0, 4)), m = Number(d.slice(5, 7)); return iso(new Date(Date.UTC(y, m, 0))); };
+
+/** Mes completo: los días que aún no vencen y no tienen sus horas cuentan como pendientes. */
+export function verMesCompleto(ix, mes) {
+  const days = new Map();
+  for (const [id, m] of ix.days) {
+    const n = new Map();
+    for (const [day, d] of m) n.set(day, day.startsWith(mes) && d.state === "en_plazo" && Number(d.hours) + TOL < Number(d.expected)
+      ? { ...d, state: Number(d.hours) <= TOL ? "falta" : "parcial", forzado: true } : (day.startsWith(mes) && d.state === "en_plazo" ? { ...d, state: "ok" } : d));
+    days.set(id, n);
+  }
+  return { ...ix, days };
 }
 
-function Periodo({ ix, gs, personas, match, soloAlertas, modo, ini, setIni }) {
+function Periodo({ ix: ixBase, gs, personas, match, soloAlertas, modo, ini, setIni, completo }) {
   const hoy = hoyLocal();
-  const todos = diasDelPeriodo(modo, ini, hoy);
-  const pasados = todos.filter((d) => d < hoy);
+  const corte = completo ? finDeMes(ini) : hoy;           // hasta hoy, o el mes completo
+  const ix = useMemo(() => (completo ? verMesCompleto(ixBase, ini.slice(0, 7)) : ixBase), [ixBase, completo, ini]);
+  const todos = diasDelPeriodo(modo, ini, corte);
+  const pasados = todos.filter((d) => d <= corte);
   const ids = personas.map((e) => e.bamboo_id);
   // Fines de semana: solo si alguien tiene registro ese día
   const cols = todos.filter((d) => weekday(d) < 5 || ids.some((id) => ix.days.get(id)?.has(d)));
@@ -266,7 +284,7 @@ function Periodo({ ix, gs, personas, match, soloAlertas, modo, ini, setIni }) {
       const y = Number(ini.slice(0, 4)), m = Number(ini.slice(5, 7));
       const prev = m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, "0")}-01`;
       const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
-      return { prev, next, label: `${titulo(MESES()[m - 1])} ${y}` + (pasados.length ? ` · ${t("hasta el {d}", { d: mini(pasados[pasados.length - 1]) })}` : ""), canPrev: addDays(ini, -1) >= minDia, canNext: next <= hoy };
+      return { prev, next, label: `${titulo(MESES()[m - 1])} ${y}` + (completo ? ` · ${t("mes completo")}` : pasados.length && finDeMes(ini) >= hoy ? ` · ${t("hasta el {d}", { d: mini(pasados[pasados.length - 1]) })}` : ""), canPrev: addDays(ini, -1) >= minDia, canNext: next <= hoy };
     })();
 
   const rs = conDatos.map((id) => res.get(id));
@@ -280,7 +298,8 @@ function Periodo({ ix, gs, personas, match, soloAlertas, modo, ini, setIni }) {
         <strong class="hb-plabel">${nav.label}</strong>
         <button class="icon" disabled=${!nav.canNext} onClick=${() => setIni(nav.next)} aria-label=${t("Siguiente")}>›</button>
       </div>
-      ${enPlazo && html`<span class="small muted">${t("Hay días que todavía no vencen: se muestran “en plazo” y no cuentan en el %.")}</span>`}
+      ${completo ? html`<span class="small hb-full">${t("Mes completo: los días sin sus horas cuentan como pendientes aunque todavía no venzan.")}</span>`
+        : enPlazo && html`<span class="small muted">${t("Hay días que todavía no vencen: se muestran “en plazo” y no cuentan en el %.")}</span>`}
     </div>
     <div class="pulse">
       <span class="pulse-item"><strong>${conDatos.length}</strong> ${t("personas")}</span>
@@ -293,7 +312,7 @@ function Periodo({ ix, gs, personas, match, soloAlertas, modo, ini, setIni }) {
     ${conDatos.length > 0 && gs.map((g, i) => {
       const ms = g.miembros.filter((e) => res.get(e.bamboo_id) && diasDe(e.bamboo_id).length && match(e) && (!soloAlertas || res.get(e.bamboo_id).pendiente || res.get(e.bamboo_id).de_mas));
       if (!ms.length) return null;
-      return html`<${Grupo} key=${g.nombre + i} g=${g} ms=${ms} res=${res} cols=${cols} ix=${ix} modo=${modo} pasados=${pasados} />`;
+      return html`<${Grupo} key=${g.nombre + i} g=${g} ms=${ms} res=${res} cols=${cols} ix=${ix} modo=${modo} pasados=${pasados} corte=${corte} />`;
     })}
   </div>`;
 }
@@ -305,7 +324,7 @@ function Leyenda({ mes }) {
     <span><i class="sw nt"></i>${t("con comentario")}</span>${mes && html`<span>${t("F feriado · P PTO · + de más")}</span>`}</div>`;
 }
 
-function Grupo({ g, ms, res, cols: todas, ix, modo, pasados }) {
+function Grupo({ g, ms, res, cols: todas, ix, modo, pasados, corte }) {
   // Sáb/dom solo si alguien de este equipo tiene registro ese día
   const cols = todas.filter((d) => weekday(d) < 5 || ms.some((e) => ix.days.get(e.bamboo_id)?.has(d)));
   const rs = ms.map((e) => res.get(e.bamboo_id));
@@ -332,13 +351,13 @@ function Grupo({ g, ms, res, cols: todas, ix, modo, pasados }) {
       <table class=${"tbl hb-tbl " + (modo === "mes" ? "mes" : "sem")}>
         <thead><tr><th>${t("Persona")}</th>${cols.map((d) => html`<th class="d">${modo === "mes" ? html`${Number(d.slice(8))}<br /><span class="muted">${DIAS()[weekday(d)][0]}</span>` : html`${DIAS()[weekday(d)]}<br /><span class="muted">${Number(d.slice(8))}</span>`}</th>`)}
           <th class="right">${t("Horas")}</th><th class="right">%</th><th>${t("Estado")}</th></tr></thead>
-        <tbody>${orden.map((e) => html`<${Fila} key=${e.bamboo_id} e=${e} r=${res.get(e.bamboo_id)} cols=${cols} ix=${ix} modo=${modo} pasados=${pasados} />`)}</tbody>
+        <tbody>${orden.map((e) => html`<${Fila} key=${e.bamboo_id} e=${e} r=${res.get(e.bamboo_id)} cols=${cols} ix=${ix} modo=${modo} pasados=${pasados} corte=${corte} />`)}</tbody>
       </table>
     </div>
   </details>`;
 }
 
-function Fila({ e, r, cols, ix, modo, pasados }) {
+function Fila({ e, r, cols, ix, modo, pasados, corte }) {
   const [open, setOpen] = useState(false);
   const { idx } = useApp();
   const dm = ix.days.get(e.bamboo_id) ?? new Map();
@@ -353,7 +372,7 @@ function Fila({ e, r, cols, ix, modo, pasados }) {
   const n = obs.length + corr.length;
   return html`<tr class=${"hb-row" + (open ? " open" : "")} onClick=${() => setOpen(!open)}>
       <td class="hb-name"><span>${e.full_name}</span><span class="small muted">${infoTxt(e.info)}</span>${n > 0 && html`<span class="hb-obs" title=${t("Observaciones")}>${n}</span>`}</td>
-      ${cols.map((d) => html`<td class="d">${d >= hoy ? html`<span class=${modo === "mes" ? "q vacio" : "c vacio"}></span>` : html`<${Celda} d=${dm.get(d)} mes=${modo === "mes"} />`}</td>`)}
+      ${cols.map((d) => html`<td class="d">${d > corte ? html`<span class=${modo === "mes" ? "q vacio" : "c vacio"}></span>` : html`<${Celda} d=${dm.get(d)} mes=${modo === "mes"} />`}</td>`)}
       <td class="right nowrap">${fmtH(r.reg)}<span class="muted">/${fmtH(r.esp)}h</span>${r.adic > 0 && html`<div class="small adx">+${fmtH(r.adic)}h ${t("adic.")}</div>`}</td>
       <td class="right"><b class=${"hb-pct " + tono(r.pct, r.pendiente)}>${Math.floor(r.pct)}%</b></td>
       <td><${Pill} r=${r} /></td>
@@ -486,8 +505,8 @@ export function BambooPersonBlock({ person }) {
   const dm = ix.days.get(e.bamboo_id) ?? new Map();
   const lunes = semanaPorDefecto(hoy);
   const sem = Array.from({ length: 7 }, (_, i) => addDays(lunes, i)).filter((d) => weekday(d) < 5 || dm.has(d));
-  const rSem = resumir(sem.filter((d) => d < hoy).map((d) => dm.get(d)).filter(Boolean));
-  const mesDias = [...dm.keys()].filter((d) => d.slice(0, 7) === hoy.slice(0, 7) && d < hoy);
+  const rSem = resumir(sem.filter((d) => d <= hoy).map((d) => dm.get(d)).filter(Boolean));
+  const mesDias = [...dm.keys()].filter((d) => d.slice(0, 7) === hoy.slice(0, 7) && d <= hoy);
   const rMes = resumir(mesDias.map((d) => dm.get(d)));
   const dev = resumenDev(ix.goals.get(e.bamboo_id), ix.training.get(e.bamboo_id), hoy);
   const v = ix.pto.get(e.bamboo_id);
@@ -497,7 +516,7 @@ export function BambooPersonBlock({ person }) {
     <div class="hb-pgrid">
       <div class="hb-card hb-wide">
         <h3>${t("Semana {a} – {b}", { a: mini(lunes), b: mini(addDays(lunes, 6)) })}</h3>
-        <div class="hb-strip">${sem.map((d) => html`<div><span class="small muted">${DIAS()[weekday(d)]}</span>${d >= hoy ? html`<span class="c vacio"></span>` : html`<${Celda} d=${dm.get(d)} />`}</div>`)}</div>
+        <div class="hb-strip">${sem.map((d) => html`<div><span class="small muted">${DIAS()[weekday(d)]}</span>${d > hoy ? html`<span class="c vacio"></span>` : html`<${Celda} d=${dm.get(d)} />`}</div>`)}</div>
         <p class="small"><${Pill} r=${rSem} /></p>
       </div>
       <div class="hb-card">
