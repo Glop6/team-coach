@@ -374,7 +374,7 @@ ${ctx || "Sin historial todavía."}`;
     const { error } = await db.from("suggestions").insert(rows);
     if (error) throw new Error(error.message);
   }
-  return { created: rows.length };
+  return { created: rows.length, titles: rows.map((r: any) => r.title) };
 }
 
 // Recomendaciones para una reunión ya analizada que no las tenga (Cambio 12)
@@ -496,6 +496,21 @@ async function notify(admin: DB, reviewId: string, userId: string) {
   return { emailed: true };
 }
 
+// Historial de IA (Cambio 17): guarda lo generado con quién y cuándo. Si la tabla no existe, no falla.
+async function guardarIA(admin: any, who: Who, personId: string, kind: string, result: unknown, lang?: string) {
+  try {
+    let nombre = who.isAdmin ? "Gus" : null;
+    if (who.myPid) {
+      const { data: me } = await admin.from("people").select("full_name").eq("id", who.myPid).maybeSingle();
+      nombre = (me as any)?.full_name ?? nombre;
+    }
+    const { data } = await admin.from("ai_generations")
+      .insert({ person_id: personId, kind, result, lang: lang ?? null, created_by: who.userId, created_by_name: nombre ?? "—" })
+      .select("id,created_at,created_by_name").single();
+    return data ?? null;
+  } catch (_) { return null; }
+}
+
 // Comprueba que el correo y la contraseña realmente permiten entrar (devuelve el error o null)
 async function probarLogin(email: string, password: string): Promise<string | null> {
   const anon = Deno.env.get("SUPABASE_ANON_KEY");
@@ -526,7 +541,10 @@ Deno.serve(async (req) => {
     const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 
     const who: Who = { userId: user.id, myPid: me?.person_id ?? null, isAdmin };
-    if (action === "prep") return json(await prep(db, admin, body.person_id, who, body.lang));
+    if (action === "prep") {
+      const r = await prep(db, admin, body.person_id, who, body.lang);
+      return json({ ...r, generation: await guardarIA(admin, who, body.person_id, "prep", r.prep, body.lang) });
+    }
     if (action === "analyze") return json(await analyze(db, admin, body.meeting_id, who));
     if (action === "idea_solutions") return json(await ideaSolutions(db, admin, body.idea_id, body.lang));
     if (action === "recommend") return json(await recommend(db, admin, body.meeting_id, who));
@@ -534,7 +552,11 @@ Deno.serve(async (req) => {
 
     if (!isAdmin) return json({ error: "Solo Gus (admin) puede usar esta acción." }, 403);
 
-    if (action === "ideas") return json(await ideas(db, body.person_id, body.focus, body.lang));
+    if (action === "ideas") {
+      const r = await ideas(db, body.person_id, body.focus, body.lang);
+      await guardarIA(admin, who, body.person_id, "ideas", { focus: body.focus ?? null, titles: r.titles }, body.lang);
+      return json(r);
+    }
 
     if (action === "create_user" || action === "reset_password") {
       const password = String(body.password ?? "").trim();

@@ -1,5 +1,12 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Ya hay una preparación del {d}. ¿Generar otra con IA?": "There's already a prep from {d}. Generate another with AI?",
+  "Generado con IA por {p} · {d}": "Generated with AI by {p} · {d}",
+  "Versiones anteriores": "Previous versions",
+  "Generar de nuevo": "Generate again",
+  "Ya generado con IA": "Already generated with AI",
+  "enfoque": "focus",
+  "Última: {d} · {p}": "Last: {d} · {p}",
   "Editar nota": "Edit note",
   "Editada por {p}, {d}": "Edited by {p}, {d}",
   "La nota no puede quedar vacía.": "The note can't be empty.",
