@@ -7,7 +7,7 @@
 import { h } from "preact";
 import { useState, useMemo } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, Busy, PersonLink } from "./app.js";
+import { useApp, t, toast, Modal, Empty, Busy, PersonLink, getLang } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -17,8 +17,12 @@ const html = htm.bind(h);
 const TZ = -4;                        // Bolivia: la fecha límite es el lunes siguiente a las 8:00 (hora de Bolivia)
 const HORA_LIMITE = 8;
 const TOL = 0.01;
-const DIAS = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
+const DIAS_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const MESES_EN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+const DIAS = () => (getLang() === "en" ? DIAS_EN : DIAS_ES);
+const MESES = () => (getLang() === "en" ? MESES_EN : MESES_ES);
 const toDate = (s) => new Date(s + "T00:00:00Z");
 const iso = (d) => d.toISOString().slice(0, 10);
 export const addDays = (s, n) => iso(new Date(toDate(s).getTime() + n * 86400000));
@@ -28,12 +32,16 @@ const limiteDe = (s) => toDate(addDays(lunesDe(s), 7)).getTime() + HORA_LIMITE *
 let _now = null;                                          // para pruebas: window.__TC_NOW = "2026-10-26T10:00"
 const nowLocal = () => _now ?? (typeof window !== "undefined" && window.__TC_NOW ? Date.parse(window.__TC_NOW + "Z") : Date.now() + TZ * 3600000);
 export const hoyLocal = () => iso(new Date(nowLocal()));
-const mini = (s) => `${Number(s.slice(8, 10))} ${MESES[Number(s.slice(5, 7)) - 1].slice(0, 3)}`;
-const larga = (s) => `${DIAS[weekday(s)]} ${Number(s.slice(8, 10))} de ${MESES[Number(s.slice(5, 7)) - 1]}`;
+const mini = (s) => getLang() === "en" ? `${MESES()[Number(s.slice(5, 7)) - 1].slice(0, 3)} ${Number(s.slice(8, 10))}` : `${Number(s.slice(8, 10))} ${MESES()[Number(s.slice(5, 7)) - 1].slice(0, 3)}`;
+const larga = (s) => getLang() === "en" ? `${DIAS()[weekday(s)]}, ${MESES()[Number(s.slice(5, 7)) - 1]} ${Number(s.slice(8, 10))}` : `${DIAS()[weekday(s)]} ${Number(s.slice(8, 10))} de ${MESES()[Number(s.slice(5, 7)) - 1]}`;
 export const fmtH = (x) => {
   const v = Math.round((Number(x) + Number.EPSILON) * 100) / 100;
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
+// La info viene del servidor en español ("Paraguay · Horario jue a lun"): se traduce al mostrar
+const DIA_EN = { lun: "Mon", mar: "Tue", mie: "Wed", jue: "Thu", vie: "Fri", sab: "Sat", dom: "Sun" };
+const infoTxt = (s) => (getLang() !== "en" || !s ? s ?? "" : s.replace("País no detectado", "Country not detected")
+  .replace(/Horario (\w+) a (\w+)/, (_, a, b) => `Schedule ${DIA_EN[a] ?? a} to ${DIA_EN[b] ?? b}`));
 const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
 const titulo = (s) => String(s ?? "").replace(/\b\w/g, (c) => c.toUpperCase());
 const hace = (ts) => {
@@ -75,7 +83,7 @@ const ESTADO_TXT = { ok: "Completo", falta: "Sin registro", parcial: "Incompleto
 
 function tooltip(d) {
   const st = estado(d);
-  const partes = [`${larga(d.day)}: ${fmtH(d.hours)}h de ${fmtH(d.expected)}h — ${t(ESTADO_TXT[st] ?? st)}`];
+  const partes = [`${larga(d.day)}: ${t("{a}h de {b}h", { a: fmtH(d.hours), b: fmtH(d.expected) })} — ${t(ESTADO_TXT[st] ?? st)}`];
   if (d.reason) partes.push(d.reason);
   for (const [p, hh] of Object.entries(d.other_projects ?? {})) partes.push(t("Proyecto adicional (no cuenta): {p} {h}h", { p, h: fmtH(hh) }));
   if (d.note) partes.push(`${t("Comentario")}: “${d.note}”`);
@@ -92,10 +100,11 @@ function Celda({ d, mes }) {
   if (mes) {
     const txt = st === "ok" ? "" : ["extra", "exceso"].includes(st) ? "+" : st === "esperado" ? (d.pto && !d.holiday ? "P" : "F")
       : st === "justificado" ? "✓" : st === "en_plazo" ? "·" : fmtH(d.hours);
+    if (st === "esperado" && getLang() === "en") return html`<span class=${`q ${st}${nt}${ad}`} title=${tooltip(d)}>${d.pto && !d.holiday ? "P" : "H"}</span>`;
     return html`<span class=${`q ${st}${nt}${ad}`} title=${tooltip(d)}>${txt}</span>`;
   }
-  let txt = `${fmtH(d.hours)}h`, sub = d.label ?? "";
-  if (st === "esperado") { txt = d.label ?? t("Libre"); sub = t("0h esperado"); }
+  let txt = `${fmtH(d.hours)}h`, sub = d.label ? t(d.label) : "";
+  if (st === "esperado") { txt = d.label ? t(d.label) : t("Libre"); sub = t("0h esperado"); }
   else if (st === "exceso") sub = t("+{h}h de más", { h: fmtH(d.hours - d.expected) });
   else if (st === "justificado") sub = t("Justificado");
   else if (st === "en_plazo") { txt = `${fmtH(d.hours)} / ${fmtH(d.expected)}h`; sub = t("En plazo"); }
@@ -257,7 +266,7 @@ function Periodo({ ix, gs, personas, match, soloAlertas, modo, ini, setIni }) {
       const y = Number(ini.slice(0, 4)), m = Number(ini.slice(5, 7));
       const prev = m === 1 ? `${y - 1}-12-01` : `${y}-${String(m - 1).padStart(2, "0")}-01`;
       const next = m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, "0")}-01`;
-      return { prev, next, label: `${titulo(MESES[m - 1])} ${y}` + (pasados.length ? ` · ${t("hasta el {d}", { d: mini(pasados[pasados.length - 1]) })}` : ""), canPrev: addDays(ini, -1) >= minDia, canNext: next <= hoy };
+      return { prev, next, label: `${titulo(MESES()[m - 1])} ${y}` + (pasados.length ? ` · ${t("hasta el {d}", { d: mini(pasados[pasados.length - 1]) })}` : ""), canPrev: addDays(ini, -1) >= minDia, canNext: next <= hoy };
     })();
 
   const rs = conDatos.map((id) => res.get(id));
@@ -293,7 +302,7 @@ function Leyenda({ mes }) {
   const it = [["ok", t("Completo")], ["parcial", t("Incompleto")], ["falta", t("Sin registro")], ["exceso", t("Horas de más")], ["extra", t("Horas en día libre")],
     ["esperado", t("Feriado / PTO")], ["justificado", t("Justificado (IA)")], ["en_plazo", t("En plazo")]];
   return html`<div class="hb-legend small muted">${it.map(([k, l]) => html`<span><i class=${"sw " + k}></i>${l}</span>`)}
-    <span><i class="sw nt"></i>${t("con comentario")}</span>${mes && html`<span>F ${t("feriado")} · P PTO · + ${t("de más")}</span>`}</div>`;
+    <span><i class="sw nt"></i>${t("con comentario")}</span>${mes && html`<span>${t("F feriado · P PTO · + de más")}</span>`}</div>`;
 }
 
 function Grupo({ g, ms, res, cols: todas, ix, modo, pasados }) {
@@ -321,7 +330,7 @@ function Grupo({ g, ms, res, cols: todas, ix, modo, pasados }) {
     </summary>
     <div class="hb-scroll">
       <table class=${"tbl hb-tbl " + (modo === "mes" ? "mes" : "sem")}>
-        <thead><tr><th>${t("Persona")}</th>${cols.map((d) => html`<th class="d">${modo === "mes" ? html`${Number(d.slice(8))}<br /><span class="muted">${DIAS[weekday(d)][0]}</span>` : html`${DIAS[weekday(d)]}<br /><span class="muted">${Number(d.slice(8))}</span>`}</th>`)}
+        <thead><tr><th>${t("Persona")}</th>${cols.map((d) => html`<th class="d">${modo === "mes" ? html`${Number(d.slice(8))}<br /><span class="muted">${DIAS()[weekday(d)][0]}</span>` : html`${DIAS()[weekday(d)]}<br /><span class="muted">${Number(d.slice(8))}</span>`}</th>`)}
           <th class="right">${t("Horas")}</th><th class="right">%</th><th>${t("Estado")}</th></tr></thead>
         <tbody>${orden.map((e) => html`<${Fila} key=${e.bamboo_id} e=${e} r=${res.get(e.bamboo_id)} cols=${cols} ix=${ix} modo=${modo} pasados=${pasados} />`)}</tbody>
       </table>
@@ -343,7 +352,7 @@ function Fila({ e, r, cols, ix, modo, pasados }) {
   const persona = e.person_id && idx.person(e.person_id);
   const n = obs.length + corr.length;
   return html`<tr class=${"hb-row" + (open ? " open" : "")} onClick=${() => setOpen(!open)}>
-      <td class="hb-name"><span>${e.full_name}</span><span class="small muted">${e.info}</span>${n > 0 && html`<span class="hb-obs" title=${t("Observaciones")}>${n}</span>`}</td>
+      <td class="hb-name"><span>${e.full_name}</span><span class="small muted">${infoTxt(e.info)}</span>${n > 0 && html`<span class="hb-obs" title=${t("Observaciones")}>${n}</span>`}</td>
       ${cols.map((d) => html`<td class="d">${d >= hoy ? html`<span class=${modo === "mes" ? "q vacio" : "c vacio"}></span>` : html`<${Celda} d=${dm.get(d)} mes=${modo === "mes"} />`}</td>`)}
       <td class="right nowrap">${fmtH(r.reg)}<span class="muted">/${fmtH(r.esp)}h</span>${r.adic > 0 && html`<div class="small adx">+${fmtH(r.adic)}h ${t("adic.")}</div>`}</td>
       <td class="right"><b class=${"hb-pct " + tono(r.pct, r.pendiente)}>${Math.floor(r.pct)}%</b></td>
@@ -488,7 +497,7 @@ export function BambooPersonBlock({ person }) {
     <div class="hb-pgrid">
       <div class="hb-card hb-wide">
         <h3>${t("Semana {a} – {b}", { a: mini(lunes), b: mini(addDays(lunes, 6)) })}</h3>
-        <div class="hb-strip">${sem.map((d) => html`<div><span class="small muted">${DIAS[weekday(d)]}</span>${d >= hoy ? html`<span class="c vacio"></span>` : html`<${Celda} d=${dm.get(d)} />`}</div>`)}</div>
+        <div class="hb-strip">${sem.map((d) => html`<div><span class="small muted">${DIAS()[weekday(d)]}</span>${d >= hoy ? html`<span class="c vacio"></span>` : html`<${Celda} d=${dm.get(d)} />`}</div>`)}</div>
         <p class="small"><${Pill} r=${rSem} /></p>
       </div>
       <div class="hb-card">
@@ -518,18 +527,23 @@ const rangoTxt = (dias) => {
   const set = new Set(dias);
   for (let ini = 0; ini < 7; ini++) {
     const orden = Array.from({ length: set.size }, (_, i) => (ini + i) % 7);
-    if (orden.every((d) => set.has(d))) return `${DIAS[orden[0]].toLowerCase()} a ${DIAS[orden[orden.length - 1]].toLowerCase()}`;
+    if (orden.every((d) => set.has(d))) return t("{a} a {b}", { a: DIAS()[orden[0]].toLowerCase(), b: DIAS()[orden[orden.length - 1]].toLowerCase() });
   }
-  return [...set].sort().map((d) => DIAS[d].toLowerCase()).join(", ");
+  return [...set].sort().map((d) => DIAS()[d].toLowerCase()).join(", ");
 };
 
 export function ReglasView() {
   const { bamboo, isAdmin } = useApp();
   const [sec, setSec] = useState("estado");
-  if (!isAdmin) return null;
   if (!bamboo) return html`<section class="page"><${Busy} /></section>`;
-  if (!bamboo.available) return html`<section class="page narrow"><h1>${t("Reglas")}</h1><p class="warn mt">${t("Falta preparar la conexión con Bamboo en Supabase (correr 06_bamboo.sql). Detalle: {e}", { e: bamboo.error ?? "" })}</p></section>`;
-  const secs = [["estado", t("Actualización y enlaces")], ["horarios", t("Horarios")], ["feriados", t("Feriados por país")], ["excluidos", t("Excluidos")], ["config", t("Configuración")]];
+  if (!bamboo.available) return html`<section class="page narrow"><h1>${isAdmin ? t("Reglas") : t("Feriados")}</h1><p class="warn mt">${isAdmin ? t("Falta preparar la conexión con Bamboo en Supabase (correr 06_bamboo.sql). Detalle: {e}", { e: bamboo.error ?? "" }) : t("La conexión con Bamboo todavía no está lista.")}</p></section>`;
+  // Los líderes solo ven los feriados de su equipo
+  if (!isAdmin) return html`<section class="page reglas">
+    <header class="page-head"><div><h1>${t("Feriados de tu equipo")}</h1>
+      <p class="muted">${t("Feriados según el país de cada persona en Bamboo. En Bolivia, elige la ciudad de cada persona y, si hace falta, mueve un feriado a otra fecha. Tus propios feriados los cambia tu líder o Gus.")}</p></div></header>
+    <${FeriadosEquipo} />
+  </section>`;
+  const secs = [["estado", t("Actualización y enlaces")], ["personas", t("Feriados por persona")], ["feriados", t("Feriados por país")], ["horarios", t("Horarios")], ["excluidos", t("Excluidos")], ["config", t("Configuración")], ["cambios", t("Cambios")]];
   return html`<section class="page reglas">
     <header class="page-head"><div><h1>${t("Reglas")}</h1>
       <p class="muted">${t("Solo tú ves y editas esta sección. Los cambios se aplican en la próxima actualización desde Bamboo.")}</p></div>
@@ -540,6 +554,8 @@ export function ReglasView() {
     ${sec === "feriados" && html`<${Feriados} />`}
     ${sec === "excluidos" && html`<${Excluidos} />`}
     ${sec === "config" && html`<${Config} />`}
+    ${sec === "personas" && html`<${FeriadosEquipo} />`}
+    ${sec === "cambios" && html`<${Cambios} />`}
   </section>`;
 }
 
@@ -630,7 +646,7 @@ function Horarios() {
         <label class="grow">${t("Persona (como está en Bamboo)")}<input list="bb-nombres" value=${nombre} onInput=${(e) => setNombre(e.target.value)} placeholder="Erika Ojeda" /></label>
         <label class="grow">${t("Nota")}<input value=${nota} onInput=${(e) => setNota(e.target.value)} placeholder=${t("Ej.: acuerdo con el cliente")} /></label>
       </div>
-      <div class="row hb-days">${DIA_OPC.map((d) => html`<label class="check"><input type="checkbox" checked=${dias.includes(d)} onChange=${() => toggle(d)} />${DIAS[d]}</label>`)}</div>
+      <div class="row hb-days">${DIA_OPC.map((d) => html`<label class="check"><input type="checkbox" checked=${dias.includes(d)} onChange=${() => toggle(d)} />${DIAS()[d]}</label>`)}</div>
       <div class="row end"><button class="primary">${t("Guardar horario")}</button></div>
     </form>
     <datalist id="bb-nombres">${nombres.map((n) => html`<option value=${n} />`)}</datalist>
@@ -678,29 +694,35 @@ function FeriadosPais({ pais, fs, gente }) {
   const [dia, setDia] = useState("");
   const [nombre, setNombre] = useState("");
   const [medio, setMedio] = useState(false);
+  const [region, setRegion] = useState("");
+  const regiones = [...new Set(fs.map((f) => f.region).filter(Boolean))];
   const add = async (e) => {
     e.preventDefault();
     if (!dia || !nombre.trim()) return toast(t("Pon la fecha y el nombre."), "bad");
     try {
       const ex = fs.find((f) => f.day === dia);
-      if (ex) await api.update("rule_holidays", ex.id, { name: nombre.trim(), fraction: medio ? 0.5 : 1 });
-      else await api.insert("rule_holidays", [{ country: norm(pais), day: dia, name: nombre.trim(), fraction: medio ? 0.5 : 1 }]);
-      setDia(""); setNombre(""); setMedio(false); toast(t("Feriado guardado")); reloadBamboo();
+      const row = { name: nombre.trim(), fraction: medio ? 0.5 : 1, region: region.trim() || null };
+      if (ex) await api.update("rule_holidays", ex.id, row);
+      else await api.insert("rule_holidays", [{ country: norm(pais), day: dia, ...row }]);
+      setDia(""); setNombre(""); setMedio(false); setRegion(""); toast(t("Feriado guardado")); reloadBamboo();
     } catch (x) { toast(x.message, "bad"); }
   };
   return html`<div class="hb-fer">
     ${gente.length > 0 && html`<p class="small muted">${t("Personas")}: ${gente.join(", ")}</p>`}
     ${fs.length ? html`<ul class="hb-list">${fs.map((f) => html`<li class="row between small" key=${f.id}>
-      <span><b>${larga(f.day)}</b>${f.day.slice(0, 4) !== hoyLocal().slice(0, 4) ? ` ${f.day.slice(0, 4)}` : ""} · ${f.name}${Number(f.fraction) < 1 ? html` <span class="pill">${t("medio día")}</span>` : ""}</span>
-      <span><button class="link small" onClick=${() => { setDia(f.day); setNombre(f.name); setMedio(Number(f.fraction) < 1); }}>${t("Editar")}</button>
+      <span><b>${larga(f.day)}</b>${f.day.slice(0, 4) !== hoyLocal().slice(0, 4) ? ` ${f.day.slice(0, 4)}` : ""} · ${f.name}${Number(f.fraction) < 1 ? html` <span class="pill">${t("medio día")}</span>` : ""}${f.region ? html` <span class="pill hb-reg">${t("regional")}: ${f.region}</span>` : ""}</span>
+      <span><button class="link small" onClick=${() => { setDia(f.day); setNombre(f.name); setMedio(Number(f.fraction) < 1); setRegion(f.region ?? ""); }}>${t("Editar")}</button>
         <button class="link small late-t" onClick=${async () => { if (confirm(t("¿Quitar {n}?", { n: f.name }))) { await api.remove("rule_holidays", f.id); reloadBamboo(); } }}>${t("Quitar")}</button></span></li>`)}</ul>`
       : html`<p class="small muted">${t("No hay feriados cargados para este país.")}</p>`}
     <form class="row" onSubmit=${add}>
       <label>${t("Fecha")}<input type="date" value=${dia} onInput=${(e) => setDia(e.target.value)} /></label>
       <label class="grow">${t("Nombre")}<input value=${nombre} onInput=${(e) => setNombre(e.target.value)} /></label>
+      <label>${t("Región (solo si es regional)")}<input list=${"reg-" + pais} value=${region} onInput=${(e) => setRegion(e.target.value)} placeholder=${t("Ej.: La Paz")} /></label>
       <label class="check"><input type="checkbox" checked=${medio} onChange=${(e) => setMedio(e.target.checked)} />${t("Medio día")}</label>
       <button class="primary">${t("Guardar feriado")}</button>
     </form>
+    <datalist id=${"reg-" + pais}>${regiones.map((r) => html`<option value=${r} />`)}</datalist>
+    ${regiones.length > 0 && html`<p class="small muted">${t("Cada persona toma solo el feriado regional de su ciudad (se elige en Feriados por persona).")}</p>`}
   </div>`;
 }
 
@@ -758,6 +780,131 @@ function Config() {
     <p class="small muted">${t("Sin margen: el registro tiene que ser exactamente las horas del día; más o menos genera alerta.")}</p>
     <div class="row end"><button class="primary">${t("Guardar")}</button></div>
   </form>`;
+}
+
+
+// ---------------------------------------------------------------------
+// Feriados por persona (líderes: su equipo · Gus: todos)
+// ---------------------------------------------------------------------
+/** Feriados del año de una persona: nacionales + el regional de su ciudad, con los cambios de fecha. */
+export function feriadosDe(rules, e, anio) {
+  const delPais = (rules?.holidays ?? []).filter((h) => h.country === e.country && h.day.startsWith(anio));
+  const regiones = [...new Set(delPais.map((h) => h.region).filter(Boolean))];
+  const defs = Object.fromEntries((rules?.config ?? []).map((c) => [c.key, c.value])).default_regions ?? {};
+  const eleccion = (rules?.choices ?? []).find((c) => c.bamboo_id === e.bamboo_id) ?? null;
+  const region = regiones.length ? (eleccion && regiones.includes(eleccion.region) ? eleccion.region : (defs[e.country] && regiones.includes(defs[e.country]) ? defs[e.country] : regiones[0])) : null;
+  const movidas = (rules?.moves ?? []).filter((m) => m.bamboo_id === e.bamboo_id);
+  const lista = delPais.filter((h) => !h.region || h.region === region).map((h) => {
+    const m = movidas.find((x) => x.original_day === h.day);
+    return { ...h, movida: m ?? null };
+  }).sort((a, b) => a.day.localeCompare(b.day));
+  return { regiones, region, porDefecto: !eleccion || eleccion.region !== region, eleccion, lista, movidas };
+}
+
+function FeriadosEquipo() {
+  const { bamboo, api, reloadBamboo, isAdmin, me, idx } = useApp();
+  const ix = useMemo(() => indexBamboo(bamboo), [bamboo]);
+  const [mover, setMover] = useState(null);
+  const [verPais, setVerPais] = useState(null);
+  const [q, setQ] = useState("");
+  const anio = hoyLocal().slice(0, 4);
+  const rules = bamboo.rules ?? {};
+  const miBamboo = me?.person_id ? idx.person(me.person_id)?.bamboo_id : null;
+  const gente = [...ix.emps.values()].filter((e) => (isAdmin ? e.supervisor_id : true) && (!q || norm(e.full_name).includes(norm(q))))
+    .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  const puede = (e) => isAdmin || e.bamboo_id !== miBamboo;
+  const paises = new Map();
+  for (const e of gente) { const k = e.country || ""; if (!paises.has(k)) paises.set(k, []); paises.get(k).push(e); }
+  const orden = [...paises.keys()].sort((a, b) => paises.get(b).length - paises.get(a).length || a.localeCompare(b));
+  const hecho = async (msg) => { toast(msg ?? t("Guardado. Se verá en Horas en la próxima actualización.")); await reloadBamboo(); api.requestSync?.(); };
+  const cambiarCiudad = async (e, region, info) => {
+    try {
+      const defs = Object.fromEntries((rules.config ?? []).map((c) => [c.key, c.value])).default_regions ?? {};
+      if (region === defs[e.country] && info.eleccion) await api.removeWhere("holiday_choices", { bamboo_id: e.bamboo_id });
+      else await api.upsert("holiday_choices", [{ bamboo_id: e.bamboo_id, region }]);
+      await hecho();
+    } catch (x) { toast(x.message, "bad"); }
+  };
+  const quitarMovida = async (m) => {
+    if (!confirm(t("¿Quitar el cambio de fecha? El feriado vuelve al {d}.", { d: mini(m.original_day) }))) return;
+    try { await api.remove("holiday_moves", m.id); await hecho(); } catch (x) { toast(x.message, "bad"); }
+  };
+  if (!gente.length && !q) return html`<${Empty}>${t("Todavía no hay datos de Bamboo de tu equipo.")}<//>`;
+  return html`<div class="block-s">
+    ${isAdmin && html`<p class="muted">${t("Feriados según el país de cada persona en Bamboo. En Bolivia cada persona toma un feriado regional según su ciudad (por defecto La Paz). Si se mueve un feriado, en Horas ese día queda libre con una nota. Cada cambio queda en Cambios.")}</p>`}
+    <div class="row hb-bar"><input class="search" type="search" placeholder=${t("Buscar persona")} value=${q} onInput=${(e) => setQ(e.target.value)} aria-label=${t("Buscar persona")} /></div>
+    ${orden.map((pais) => {
+      const ps = paises.get(pais);
+      const fer = (rules.holidays ?? []).filter((h) => h.country === pais && h.day.startsWith(anio));
+      const nac = fer.filter((h) => !h.region), reg = fer.filter((h) => h.region);
+      const conRegion = reg.length > 0;
+      return html`<details class="hb-group" open key=${pais || "x"}>
+        <summary><span class="hb-gname"><strong>${pais ? titulo(pais) : t("País no detectado")}</strong> <span class="small muted">· ${ps.length} ${ps.length === 1 ? t("persona") : t("personas")}</span></span>
+          <span class="small muted">${pais ? (conRegion ? t("{n} feriados nacionales + 1 regional por persona", { n: nac.length }) : t("{n} feriados en {y}", { n: nac.length, y: anio })) : t("Sin país en Bamboo: no se aplican feriados")}</span>
+          <span><button class="link small" onClick=${(ev) => { ev.preventDefault(); setVerPais(verPais === pais ? null : pais); }}>${verPais === pais ? t("Ocultar feriados") : t("Ver feriados")}</button></span></summary>
+        ${verPais === pais && html`<div class="hb-fer hb-ferlist">${fer.length ? fer.sort((a, b) => a.day.localeCompare(b.day)).map((h) => html`<p class="small"><b>${larga(h.day)}</b> · ${h.name}${Number(h.fraction) < 1 ? ` (${t("medio día")})` : ""}${h.region ? html` <span class="pill hb-reg">${t("regional")}: ${h.region}</span>` : ""}</p>`) : html`<p class="small muted">${t("No hay feriados cargados para este país.")}</p>`}</div>`}
+        <table class="tbl hb-fp"><thead><tr><th>${t("Persona")}</th>${conRegion && html`<th>${t("Ciudad (feriado regional)")}</th>`}<th>${t("Cambios de fecha")}</th><th></th></tr></thead>
+          <tbody>${ps.map((e) => {
+            const info = feriadosDe(rules, e, anio);
+            const yo = e.bamboo_id === miBamboo;
+            const regDia = info.lista.find((h) => h.region);
+            return html`<tr key=${e.bamboo_id}>
+              <td><strong>${e.full_name}</strong>${yo && html` <span class="pill">${t("tú")}</span>`}${!puede(e) && html`<div class="small muted">${t("Lo cambia tu líder o Gus")}</div>`}</td>
+              ${conRegion && html`<td>
+                <select class="mini" value=${info.region ?? ""} disabled=${!puede(e)} onChange=${(ev) => cambiarCiudad(e, ev.target.value, info)}>
+                  ${info.regiones.map((r) => html`<option value=${r}>${r}</option>`)}
+                </select>
+                <div class="small muted">${regDia ? `${mini(regDia.day)} · ` : ""}${info.porDefecto ? t("por defecto") : t("elegida por {p}, {d}", { p: info.eleccion.changed_by_name ?? "—", d: mini(String(info.eleccion.changed_at).slice(0, 10)) })}</div>
+              </td>`}
+              <td>${info.movidas.length ? info.movidas.map((m) => html`<span class="hb-mov" title=${[m.note, t("por {p}, {d}", { p: m.changed_by_name ?? "—", d: mini(String(m.changed_at).slice(0, 10)) })].filter(Boolean).join(" · ")}>
+                  ${mini(m.original_day)} → ${mini(m.new_day)}${puede(e) && html`<button class="link small late-t" aria-label=${t("Quitar")} onClick=${() => quitarMovida(m)}>✕</button>`}</span>`) : html`<span class="small muted">—</span>`}</td>
+              <td class="right">${puede(e) && pais && html`<button class="small" onClick=${() => setMover(mover === e.bamboo_id ? null : e.bamboo_id)}>${t("Mover un feriado")}</button>`}</td>
+            </tr>
+            ${mover === e.bamboo_id && html`<tr><td colspan=${conRegion ? 4 : 3}><${MoverFeriado} e=${e} info=${info} onDone=${async () => { setMover(null); await hecho(); }} onCancel=${() => setMover(null)} /></td></tr>`}`;
+          })}</tbody></table>
+      </details>`;
+    })}
+  </div>`;
+}
+
+function MoverFeriado({ e, info, onDone, onCancel }) {
+  const { api } = useApp();
+  const opciones = info.lista.filter((h) => !h.movida);
+  const proximo = opciones.find((h) => h.day >= hoyLocal()) ?? opciones[opciones.length - 1];
+  const [orig, setOrig] = useState(proximo?.day ?? "");
+  const [nuevo, setNuevo] = useState("");
+  const [nota, setNota] = useState("");
+  const [busy, setBusy] = useState(false);
+  const guardar = async (ev) => {
+    ev.preventDefault();
+    if (!orig || !nuevo) return toast(t("Elige el feriado y la nueva fecha."), "bad");
+    if (orig === nuevo) return toast(t("La nueva fecha tiene que ser distinta."), "bad");
+    if (weekday(nuevo) >= 5) return toast(t("La nueva fecha cae en fin de semana."), "bad");
+    setBusy(true);
+    try { await api.insert("holiday_moves", [{ bamboo_id: e.bamboo_id, original_day: orig, new_day: nuevo, note: nota.trim() || null }]); await onDone(); }
+    catch (x) { toast(x.message.includes("duplicate") ? t("Ese feriado ya tiene un cambio de fecha.") : x.message, "bad"); }
+    setBusy(false);
+  };
+  if (!opciones.length) return html`<p class="small muted">${t("No quedan feriados por mover este año.")} <button class="link small" onClick=${onCancel}>${t("Cerrar")}</button></p>`;
+  return html`<form class="hb-form row" onSubmit=${guardar}>
+    <label>${t("Feriado")}<select value=${orig} onChange=${(ev) => setOrig(ev.target.value)}>${opciones.map((h) => html`<option value=${h.day}>${mini(h.day)} · ${h.name}</option>`)}</select></label>
+    <label>${t("Nueva fecha")}<input type="date" value=${nuevo} onInput=${(ev) => setNuevo(ev.target.value)} /></label>
+    <label class="grow">${t("Motivo")}<input value=${nota} onInput=${(ev) => setNota(ev.target.value)} placeholder=${t("Ej.: a pedido del cliente")} /></label>
+    <div class="row end"><button type="button" onClick=${onCancel}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Guardar cambio")}</button></div>
+    <p class="small muted">${t("En Horas, el {a} pasa a ser día normal y la nueva fecha queda libre con una nota. Queda registrado quién lo cambió.", { a: orig ? mini(orig) : "—" })}</p>
+  </form>`;
+}
+
+function Cambios() {
+  const { bamboo } = useApp();
+  const rows = bamboo.rules?.changes ?? [];
+  return html`<div class="block-s">
+    <p class="muted">${t("Cambios de ciudad y de fecha de feriados hechos por los líderes (y por ti). Los más recientes primero.")}</p>
+    ${rows.length ? html`<table class="tbl"><thead><tr><th>${t("Cuándo")}</th><th>${t("Quién")}</th><th>${t("Persona")}</th><th>${t("Cambio")}</th></tr></thead>
+      <tbody>${rows.map((r) => html`<tr key=${r.id}><td class="small nowrap">${new Date(r.at).toLocaleString(getLang() === "en" ? "en-US" : "es-BO", { dateStyle: "medium", timeStyle: "short" })}</td>
+        <td>${r.by_name}</td><td>${r.person_name}</td><td class="small">${r.detail}</td></tr>`)}</tbody></table>`
+      : html`<${Empty}>${t("Todavía no hay cambios.")}<//>`}
+  </div>`;
 }
 
 export const __test = { setNow: (ms) => { _now = ms; } };

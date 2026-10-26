@@ -95,7 +95,55 @@ export type Rules = {
   horasDia: number;
   horaLimite: number;
   tz: number;                             // horas respecto de UTC (-4 = Bolivia)
+  // Feriados regionales (Bolivia: La Paz / Cochabamba / Santa Cruz) y cambios por persona (Reglas)
+  regionales?: Record<string, Record<string, [string, number, string]>>;   // país -> fecha -> [nombre, fracción, región]
+  regionDefault?: Record<string, string>;                                  // país -> región por defecto
+  elecciones?: Map<string, { region: string; por: string | null; cuando: string | null }>;
+  movidas?: Map<string, { original: string; nuevo: string; nota: string | null; por: string | null; cuando: string | null }[]>;
 };
+
+/** Feriados de UNA persona: los nacionales de su país + el regional de su ciudad, con los cambios de Reglas. */
+export function feriadosPersona(rules: Rules, eid: string, pais: string | null): Feriados {
+  if (!pais) return {};
+  const base: Record<string, [string, number]> = { ...(rules.feriados[pais] ?? {}) };
+  const reg = rules.regionales?.[pais];
+  if (reg && Object.keys(reg).length) {
+    const eleccion = rules.elecciones?.get(eid);
+    const regiones = [...new Set(Object.values(reg).map((x) => x[2]))];
+    const region = eleccion && regiones.includes(eleccion.region) ? eleccion.region : (rules.regionDefault?.[pais] ?? regiones[0]);
+    for (const [f, [nombre, frac, r]] of Object.entries(reg)) {
+      if (r !== region) continue;
+      const quien = eleccion && eleccion.region === region && eleccion.por ? ` (ciudad elegida en Reglas por ${eleccion.por}${eleccion.cuando ? ", " + fechaMini(eleccion.cuando.slice(0, 10)) : ""})` : "";
+      base[f] = [nombre + quien, frac];
+    }
+  }
+  for (const m of rules.movidas?.get(eid) ?? []) {
+    const fer = base[m.original];
+    if (!fer) continue;
+    delete base[m.original];
+    const por = m.por ? ` en Reglas por ${m.por}${m.cuando ? ", " + fechaMini(m.cuando.slice(0, 10)) : ""}` : "";
+    base[m.nuevo] = [`${fer[0]} (movido del ${fechaMini(m.original)}${por}${m.nota ? ": " + m.nota : ""})`, fer[1]];
+  }
+  return { [pais]: base };
+}
+
+/** Avisos en Horas cuando un feriado se eligió o movió en Reglas (para que se entienda el día libre). */
+export function obsReglas(rules: Rules, eid: string, pais: string | null, ini: string, fin: string): { tipo: string; fuente: string; fechas: string[]; texto: string }[] {
+  const out: { tipo: string; fuente: string; fechas: string[]; texto: string }[] = [];
+  const en = (d: string) => d >= ini && d <= fin;
+  for (const m of rules.movidas?.get(eid) ?? []) {
+    if (!en(m.original) && !en(m.nuevo)) continue;
+    out.push({ tipo: "info", fuente: "Reglas", fechas: [m.original, m.nuevo].filter(en),
+      texto: `Feriado del ${fechaMini(m.original)} movido al ${fechaMini(m.nuevo)}${m.por ? ` por ${m.por}` : ""}${m.nota ? `: ${m.nota}` : ""}.` });
+  }
+  const reg = pais ? rules.regionales?.[pais] : undefined;
+  const e = rules.elecciones?.get(eid);
+  if (reg && e) {
+    const dias = Object.entries(reg).filter(([f, x]) => x[2] === e.region && en(f)).map(([f]) => f);
+    if (dias.length) out.push({ tipo: "info", fuente: "Reglas", fechas: dias, texto: `Feriado regional de ${e.region}${e.por ? ` (elegido por ${e.por})` : ""}.` });
+  }
+  return out;
+}
 
 export function activo(e: any, hoy: string): boolean {
   if (norm(e.status) === "inactive" || norm(e.employmentHistoryStatus).includes("terminat")) return false;
@@ -460,8 +508,9 @@ export function evaluarEquipo(equipo: Map<string, any>, entradas: any[], reqs: a
     const pais = paisDe(e, rules.feriados);
     const info = (pais ? titulo(pais) : "País no detectado") + (lab.join() !== LABORABLES_DEFAULT.join() ? ` · Horario ${rangoDiasTxt(lab)}` : "");
     const ds: Dia[] = [];
+    const fer = feriadosPersona(rules, eid, pais);
     for (const d of dias) {
-      const x = evaluarDia(eid, pais, d, h, libre, rules.feriados, ahora, lab, rules.horasDia, rules.horaLimite);
+      const x = evaluarDia(eid, pais, d, h, libre, fer, ahora, lab, rules.horasDia, rules.horaLimite);
       if (x.estado !== "descanso") ds.push(x);                // los días de descanso sin horas no se guardan
     }
     out.set(eid, { pais, info, laborables: lab, dias: ds });
@@ -624,18 +673,36 @@ export async function analizarIA(eval_: Map<string, { pais: string | null; labor
 // Sincronización completa
 // ---------------------------------------------------------------------
 export async function cargarReglas(db: any): Promise<Rules> {
-  const [fer, exc, hor, cfg] = await Promise.all([
-    db.from("rule_holidays").select("country,day,name,fraction"),
+  let fer = await db.from("rule_holidays").select("country,day,name,fraction,region");
+  if (fer.error) fer = await db.from("rule_holidays").select("country,day,name,fraction");   // antes de 09_feriados_regionales.sql
+  const [exc, hor, cfg] = await Promise.all([
     db.from("rule_excluded").select("full_name"),
     db.from("rule_schedules").select("full_name,days"),
     db.from("rule_config").select("key,value"),
   ]);
   for (const r of [fer, exc, hor, cfg]) if (r.error) throw new Error("No pude leer las reglas: " + r.error.message);
   const feriados: Feriados = {};
-  for (const f of fer.data) (feriados[canonPais(f.country)] ??= {})[f.day] = [f.name, Number(f.fraction)];
+  const regionales: Record<string, Record<string, [string, number, string]>> = {};
+  for (const f of fer.data) {
+    if (f.region) (regionales[canonPais(f.country)] ??= {})[f.day] = [f.name, Number(f.fraction), f.region];
+    else (feriados[canonPais(f.country)] ??= {})[f.day] = [f.name, Number(f.fraction)];
+  }
   const c = Object.fromEntries(cfg.data.map((r: any) => [r.key, r.value]));
+  // Cambios por persona (si todavía no existen las tablas, se ignoran)
+  const [ch, mv] = await Promise.all([
+    db.from("holiday_choices").select("bamboo_id,region,changed_by_name,changed_at"),
+    db.from("holiday_moves").select("bamboo_id,original_day,new_day,note,changed_by_name,changed_at"),
+  ]);
+  const elecciones = new Map<string, { region: string; por: string | null; cuando: string | null }>();
+  for (const r of (ch.error ? [] : ch.data ?? [])) elecciones.set(String(r.bamboo_id), { region: r.region, por: r.changed_by_name ?? null, cuando: r.changed_at ?? null });
+  const movidas = new Map<string, { original: string; nuevo: string; nota: string | null; por: string | null; cuando: string | null }[]>();
+  for (const r of (mv.error ? [] : mv.data ?? [])) {
+    const k = String(r.bamboo_id);
+    movidas.set(k, [...(movidas.get(k) ?? []), { original: r.original_day, nuevo: r.new_day, nota: r.note ?? null, por: r.changed_by_name ?? null, cuando: r.changed_at ?? null }]);
+  }
+  const regionDefault = Object.fromEntries(Object.entries((c.default_regions && typeof c.default_regions === "object") ? c.default_regions : {}).map(([k, v]) => [canonPais(k), String(v)]));
   return {
-    feriados,
+    feriados, regionales, regionDefault, elecciones, movidas,
     excluidos: new Set(exc.data.map((r: any) => norm(r.full_name))),
     horarios: Object.fromEntries(hor.data.map((r: any) => [norm(r.full_name), r.days])),
     principales: Array.isArray(c.main_projects) && c.main_projects.length ? c.main_projects : ["DDC"],
@@ -693,7 +760,7 @@ export async function sincronizar(db: any, api: Api, opts: { aiKey?: string; aiM
   for (const [eid, v] of ev) {
     const r = resIA.get(eid) ?? null;
     if (r) aplicarIA(v.dias, r);
-    obs.set(eid, observaciones(v.pais, v.dias, r, rules.horasDia, !v.pais || !!rules.feriados[v.pais]));
+    obs.set(eid, [...obsReglas(rules, eid, v.pais, ini, fin), ...observaciones(v.pais, v.dias, r, rules.horasDia, !v.pais || !!rules.feriados[v.pais])]);
   }
 
   // Goals, training y vacaciones
@@ -835,7 +902,13 @@ if (typeof Deno !== "undefined") Deno.serve(async (req: Request) => {
       const { data: { user } } = await admin.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
       if (!user) return json({ error: "Sesión inválida. Vuelve a iniciar sesión." }, 401);
       const { data: me } = await admin.from("profiles").select("role").eq("id", user.id).single();
-      if (me?.role !== "admin") return json({ error: "Solo Gus puede actualizar desde Bamboo." }, 403);
+      const body = await req.clone().json().catch(() => ({}));
+      if (body?.source === "regla" && (me?.role === "lead" || me?.role === "admin")) {
+        // Alguien cambió un feriado en Reglas: se actualiza, pero como mucho una vez cada 3 minutos
+        const { data: reciente } = await admin.from("bamboo_sync_log").select("id").gte("started_at", new Date(Date.now() - 3 * 60000).toISOString()).limit(1);
+        if (reciente?.length) return json({ ok: true, skipped: true, message: "Se reflejará en la próxima actualización." });
+        fuente = "regla";
+      } else if (me?.role !== "admin") return json({ error: "Solo Gus puede actualizar desde Bamboo." }, 403);
     }
     const key = env("BAMBOO_API_KEY");
     if (!key) return json({ error: "Falta el secreto BAMBOO_API_KEY en Supabase (Edge Functions → Secrets)." }, 500);

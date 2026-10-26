@@ -608,3 +608,11 @@ button.link + button.link { margin-left: 0.8rem; }
 .side .seg button + button { border-left-color: var(--side-line, var(--line)); }
 .side .seg button.on { background: var(--primary); color: var(--primary-ink); }
 .mark i { mix-blend-mode: var(--mark-blend, multiply); }
+.pill.hb-reg { background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+.hb-mov { display: inline-flex; align-items: center; gap: 0.3rem; background: var(--hb-ai-bg); color: var(--hb-ai); border-radius: 999px; padding: 0.1rem 0.55rem; font-size: 0.8rem; font-weight: 600; margin: 0 0.3rem 0.2rem 0; }
+.hb-mov button.link { padding: 0; }
+.hb-ferlist { margin: 0.6rem 1rem; }
+.hb-fp td { vertical-align: top; }
+.hb-fp { table-layout: fixed; }
+.hb-fp th:first-child { width: 32%; }
+.hb-fp th:last-child { width: 170px; }
