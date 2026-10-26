@@ -66,7 +66,7 @@ begin
     end if;
     if v_pid is null then
       insert into public.people (full_name, email, group_id, is_lead, status, bamboo_id)
-      values (e.full_name, e.email, v_group, e.bamboo_id = v_lead.bamboo_id, 'activo', e.bamboo_id)
+      values (e.full_name, case when e.bamboo_id = v_lead.bamboo_id then e.email end, v_group, e.bamboo_id = v_lead.bamboo_id, 'activo', e.bamboo_id)   -- solo el líder lleva correo (para su acceso)
       on conflict (full_name) do nothing
       returning id into v_pid;
       if v_pid is null then   -- mismo nombre ya enlazado a otro empleado: se informa y se sigue
