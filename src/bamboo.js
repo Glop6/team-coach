@@ -674,9 +674,11 @@ function Feriados() {
       <tbody>${paises.filter((p) => todos || gente.has(p) || abierto === p).map((p) => {
         const fs = (porPais.get(p) ?? []).sort((a, b) => a.day.localeCompare(b.day));
         const n = gente.get(p)?.length ?? 0;
-        const nAnio = fs.filter((f) => f.day.startsWith(anio)).length;
+        const delAnio = fs.filter((f) => f.day.startsWith(anio));
+        const nReg = delAnio.filter((f) => f.region).length;
+        const nAnio = delAnio.length - nReg + (nReg ? 1 : 0);      // con regionales: nacionales + 1 por persona
         return html`<tr key=${p} class=${n && !nAnio ? "hb-alert" : ""}><td><strong>${titulo(p)}</strong>${n && !nAnio ? html` <span class="pill hb-bad">${t("sin feriados")}</span>` : ""}</td>
-          <td class="right" title=${(gente.get(p) ?? []).join(", ")}>${n}</td><td class="right">${nAnio}</td>
+          <td class="right" title=${(gente.get(p) ?? []).join(", ")}>${n}</td><td class="right" title=${nReg ? t("{n} nacionales + 1 regional (de {r} opciones)", { n: delAnio.length - nReg, r: nReg }) : ""}>${nAnio}${nReg ? html` <span class="small muted">(${delAnio.length - nReg} + 1)</span>` : ""}</td>
           <td class="right"><button class="link small" onClick=${() => setAbierto(abierto === p ? null : p)}>${abierto === p ? t("Cerrar") : t("Ver y editar")}</button></td></tr>
           ${abierto === p && html`<tr><td colspan="4"><${FeriadosPais} pais=${p} fs=${fs} gente=${gente.get(p) ?? []} /></td></tr>`}`;
       })}</tbody></table>

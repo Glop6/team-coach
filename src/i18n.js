@@ -1,5 +1,6 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "{n} nacionales + 1 regional (de {r} opciones)": "{n} national + 1 regional (out of {r} options)",
   // Cambio 13–15 (Horas, Reglas, Feriados)
   "hace un momento": "just now",
   "hace {n} min": "{n} min ago",
