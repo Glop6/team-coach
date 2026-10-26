@@ -617,3 +617,7 @@ button.link + button.link { margin-left: 0.8rem; }
 .hb-fp th:first-child { width: 32%; }
 .hb-fp th:last-child { width: 170px; }
 .hb-full { color: var(--primary); font-weight: 600; }
+.tl-item { position: relative; }
+.tl-item .note-edit { position: absolute; top: 0; right: 0; padding: 0.15rem 0.45rem; font-size: 0.85rem; opacity: 0.55; border: 0; background: none; }
+.tl-item:hover .note-edit, .tl-item .note-edit:focus-visible { opacity: 1; }
+.note-edited { margin-top: 0.1rem; font-size: 0.76rem; }

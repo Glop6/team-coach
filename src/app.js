@@ -516,6 +516,52 @@ function AddNote({ person, onClose }) {
   <//>`;
 }
 
+// Cambio 16: editar una nota ya guardada (Gus: todas · líder: las de su gente)
+const canEditNote = (ctx, i) => ctx.isAdmin || i.author_id === ctx.session?.user?.id
+  || (!i.private && i.person_id !== ctx.me?.person_id && !ctx.idx.isLead(i.person_id));
+
+function NoteItem({ i, showCat = true }) {
+  const ctx = useApp();
+  const [edit, setEdit] = useState(false);
+  return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}
+    ${canEditNote(ctx, i) && html`<button class="icon note-edit" title=${t("Editar nota")} aria-label=${t("Editar nota")} onClick=${() => setEdit(true)}>✎</button>`}
+    <p>${i.body}</p>
+    ${i.edited_at && html`<p class="small muted note-edited">${t("Editada por {p}, {d}", { p: i.edited_by_name ?? "—", d: fmtDate(String(i.edited_at).slice(0, 10)) })}</p>`}
+    ${edit && html`<${EditNote} note=${i} onClose=${() => setEdit(false)} />`}
+  </div>`;
+}
+
+function EditNote({ note, onClose }) {
+  const { api, reload, idx } = useApp();
+  const [kind, setKind] = useState(note.kind);
+  const [category, setCategory] = useState(note.category ?? "");
+  const [body, setBody] = useState(note.body);
+  const [busy, setBusy] = useState(false);
+  const p = idx.person(note.person_id);
+  const save = async (e) => {
+    e.preventDefault();
+    if (!body.trim()) return toast(t("La nota no puede quedar vacía."), "bad");
+    setBusy(true);
+    try {
+      const r = await api.update("insights", note.id, { kind, category: category.trim() || null, body: body.trim() });
+      if (Array.isArray(r) && !r.length) throw new Error(t("No tienes permiso para editar esta nota."));
+      toast(t("Nota actualizada")); reload(); onClose();
+    } catch (x) { toast(x.message, "bad"); }
+    setBusy(false);
+  };
+  return html`<${Modal} title=${t("Editar nota sobre {n}", { n: firstName(p?.full_name ?? "") })} onClose=${onClose}>
+    <form class="stack" onSubmit=${save}>
+      <div class="row">
+        <label class="grow">${t("Tipo")}<select value=${kind} onChange=${(e) => setKind(e.target.value)}>${KIND_ORDER.map((k) => html`<option value=${k}>${t(KIND_LABEL[k])}</option>`)}</select></label>
+        <label class="grow">${t("Tema")}<input list="cats" value=${category} onInput=${(e) => setCategory(e.target.value)} /></label>
+      </div>
+      <label>${t("Qué pasó")}<textarea rows="5" value=${body} onInput=${(e) => setBody(e.target.value)}></textarea></label>
+      <p class="small muted">${t("Queda registrado quién la editó y cuándo; Gus puede ver el texto anterior.")}</p>
+      <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Guardar cambios")}</button></div>
+    </form>
+  <//>`;
+}
+
 function EditPerson({ person, onClose, defaultGroup }) {
   const { api, reload, data } = useApp();
   const [f, setF] = useState({ status: "activo", group_id: defaultGroup ?? null, ...person });
@@ -707,7 +753,7 @@ function PersonView({ id }) {
           ${byMeeting.map((b) => html`<li key=${b.key}>
             <div class="tl-date">${b.meeting ? html`<a href=${"#/reunion/" + b.meeting.id}>${t(MEETING_KIND[b.meeting.kind])} ${fmtDate(b.meeting.meeting_date)}</a>` : fmtDate(b.date)}</div>
             ${b.summary && html`<p class="tl-sum">${b.summary}</p>`}
-            ${b.items.map((i) => html`<div class="tl-item"><${Kind} kind=${i.kind} />${i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}<p>${i.body}</p></div>`)}
+            ${b.items.map((i) => html`<${NoteItem} i=${i} key=${i.id} />`)}
           </li>`)}
         </ol>
       </section>
@@ -850,7 +896,7 @@ function MeetingView({ id }) {
     ${people.length > 0 && html`<section class="block"><h2>${t("Por persona")}</h2>
       <div class="per-person">${people.map((pid) => html`<div class="pp" key=${pid}>
         <h3><${PersonLink} id=${pid} /></h3>
-        ${ins.filter((i) => i.person_id === pid).map((i) => html`<div class="tl-item"><${Kind} kind=${i.kind} />${i.private && html`<span class="cat">${t("privada")}</span>`}<p>${i.body}</p></div>`)}
+        ${ins.filter((i) => i.person_id === pid).map((i) => html`<${NoteItem} i=${i} showCat=${false} key=${i.id} />`)}
         ${!showPanel && sugg.filter((s) => s.person_id === pid).map((s) => html`<${SuggestionCard} s=${s} compact key=${s.id} />`)}
       </div>`)}</div>
     </section>`}
