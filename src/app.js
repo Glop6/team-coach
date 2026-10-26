@@ -212,6 +212,20 @@ function Login({ api, onLang }) {
   </main>`;
 }
 
+// Tema: automático (según el equipo), claro u oscuro. Se recuerda en este navegador.
+const applyTheme = (th) => {
+  if (th === "light" || th === "dark") document.documentElement.dataset.theme = th;
+  else delete document.documentElement.dataset.theme;
+};
+try { applyTheme(localStorage.getItem("tc-theme")); } catch (_) {}
+function ThemeSwitch() {
+  const [th, setTh] = useState(() => { try { return localStorage.getItem("tc-theme") || "auto"; } catch (_) { return "auto"; } });
+  const pick = (x) => { setTh(x); applyTheme(x); try { localStorage.setItem("tc-theme", x); } catch (_) {} };
+  return html`<span class="seg lang" role="group" aria-label=${t("Tema")}>
+    ${[["auto", t("Auto")], ["light", t("Claro")], ["dark", t("Oscuro")]].map(([k, l]) => html`<button type="button" class=${th === k ? "on" : ""} aria-pressed=${th === k} onClick=${() => pick(k)}>${l}</button>`)}
+  </span>`;
+}
+
 function LangSwitch({ onLang }) {
   return html`<span class="seg lang" role="group" aria-label="Idioma / Language">
     <button type="button" class=${LANG === "es" ? "on" : ""} onClick=${() => onLang("es")}>Español</button>
@@ -1484,6 +1498,7 @@ function Shell({ api, session, onLang }) {
           <span class="small">${profile.email ?? session.user.email}</span>
           ${api.demo && html`<span class="small gold-t">${t("Modo demo")}</span>`}
           <${LangSwitch} onLang=${setLang} />
+          <${ThemeSwitch} />
           <button class="link small" onClick=${() => setPwModal(true)}>${t("Cambiar contraseña")}</button>
           <button class="link small" onClick=${() => api.signOut()}>${t("Salir")}</button>
         </div>
