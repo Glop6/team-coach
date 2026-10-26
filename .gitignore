@@ -1,0 +1,7 @@
+node_modules
+# Datos del equipo: no se publican (el repo es público)
+supabase/0[1-5]_*.sql
+supabase/06b_*.sql
+supabase/gen_seed.py
+src/demo.js
+demo-data.json

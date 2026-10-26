@@ -1,0 +1,16 @@
+{
+  "name": "team-coach",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.js --bundle --format=esm --minify --outfile=app.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.45.4",
+    "htm": "3.1.1",
+    "preact": "10.24.3"
+  },
+  "devDependencies": {
+    "esbuild": "0.24.0"
+  }
+}
