@@ -1,15 +1,19 @@
 :root {
-  --bg: #edf0ea;
+  /* Paleta "Azul ejecutivo" (Cambio 13) */
+  --bg: #f4f6fa;
   --surface: #ffffff;
-  --surface-2: #f6f8f4;
-  --ink: #1e2a28;
-  --muted: #5d6b66;
-  --line: #d6ddd5;
-  --primary: #23535a;
+  --surface-2: #eef2f8;
+  --ink: #121a2b;
+  --muted: #5a6579;
+  --line: #dde3ec;
+  --primary: #2459d6;
   --primary-ink: #ffffff;
-  --gold: #e0a526;
-  --late: #b4334b;
-  --ok: #2e8b6e;
+  --gold: #f5a524;
+  --late: #e5484d;
+  --ok: #16a374;
+  /* Barra lateral azul noche */
+  --side-bg: #0f1b33; --side-ink: #d6deee; --side-line: #0f1b33; --side-hover: #1a2a4a;
+  --side-on-bg: #25396a; --side-on-ink: #ffffff; --side-link: #9cc0ff; --side-seg: #16264a; --mark-blend: screen;
   --radius-lg: 18px;
   --radius: 10px;
   --radius-sm: 6px;
@@ -19,14 +23,16 @@
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #141b1a; --surface: #1c2523; --surface-2: #222d2b; --ink: #e6ece8; --muted: #9aa8a3;
-    --line: #33403d; --primary: #6fb3ba; --primary-ink: #0f1917; --gold: #f0bd4f; --late: #ef6b84; --ok: #5cc49f;
+    --bg: #0b0f17; --surface: #131a25; --surface-2: #1a2331; --ink: #e6ecf5; --muted: #95a3b8;
+    --line: #283447; --primary: #6ea2ff; --primary-ink: #0b0f17; --gold: #f7bd4f; --late: #ff7a7f; --ok: #4fd39c;
+    --side-bg: #0e1420; --side-line: #1f2a3b; --side-hover: #18223a; --side-on-bg: #1f3157; --side-seg: #151e30;
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #141b1a; --surface: #1c2523; --surface-2: #222d2b; --ink: #e6ece8; --muted: #9aa8a3;
-  --line: #33403d; --primary: #6fb3ba; --primary-ink: #0f1917; --gold: #f0bd4f; --late: #ef6b84; --ok: #5cc49f;
+  --bg: #0b0f17; --surface: #131a25; --surface-2: #1a2331; --ink: #e6ecf5; --muted: #95a3b8;
+    --line: #283447; --primary: #6ea2ff; --primary-ink: #0b0f17; --gold: #f7bd4f; --late: #ff7a7f; --ok: #4fd39c;
+    --side-bg: #0e1420; --side-line: #1f2a3b; --side-hover: #18223a; --side-on-bg: #1f3157; --side-seg: #151e30;
   color-scheme: dark;
 }
 
@@ -89,7 +95,7 @@ label.check input { width: auto; }
 .constellation circle:nth-child(3n) { animation-delay: -6s; }
 @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .constellation circle { mix-blend-mode: screen; opacity: 0.7; } }
-.login-card { background: var(--surface); padding: 2.2rem; border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 1rem; position: relative; box-shadow: 0 30px 60px -30px rgba(20, 40, 38, 0.35); }
+.login-card { background: var(--surface); padding: 2.2rem; border-radius: var(--radius-lg); display: flex; flex-direction: column; gap: 1rem; position: relative; box-shadow: 0 30px 60px -30px rgba(15, 27, 51, 0.35); }
 .login-card .lang { align-self: center; margin-top: 0.4rem; }
 .login-card h1 { font-size: 2.6rem; }
 
@@ -277,7 +283,7 @@ details summary { cursor: pointer; color: var(--muted); font-weight: 550; font-s
 pre.cred { white-space: pre-wrap; background: var(--surface-2); padding: 0.9rem; border-radius: var(--radius-sm); font: 0.9rem/1.5 var(--font-body); }
 
 /* Modal */
-.modal-bg { position: fixed; inset: 0; background: rgba(15, 25, 23, 0.45); display: grid; place-items: center; padding: 16px; z-index: 50; }
+.modal-bg { position: fixed; inset: 0; background: rgba(11, 15, 23, 0.5); display: grid; place-items: center; padding: 16px; z-index: 50; }
 .modal { background: var(--bg); border-radius: var(--radius-lg); width: min(560px, 100%); max-height: 90vh; overflow: auto; padding: 1.3rem 1.4rem 1.5rem; }
 .modal.wide { width: min(900px, 100%); }
 .modal > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem; }
@@ -454,36 +460,25 @@ input.date-in.late { color: var(--late); font-weight: 650; }
 @media (max-width: 1200px) { .page:not(.review) .split > .coach-panel { order: -1; } }
 
 /* ===== Cambio 13: Horas desde Bamboo ===== */
-/* Paleta sobria: los días "completos" son discretos y solo resaltan las alertas.
-   Tonos tomados de la paleta de la app (verde azulado, ocre, rosa vino). */
+/* Estados: los días completos se ven tranquilos y las alertas resaltan, sin colores chillones. */
 :root {
-  --hb-ok: #3f6f5a;   --hb-ok-bg: #e7efea;
-  --hb-warn: #8a6418; --hb-warn-bg: #f6ecd8;
-  --hb-bad: #a33b48;  --hb-bad-bg: #f5e3e4;
-  --hb-exp: #3e5f8c;  --hb-exp-bg: #e4eaf3;
-  --hb-ai: #67508f;   --hb-ai-bg: #ece7f3;
-  --hb-wait: #6f7c77; --hb-wait-bg: #f1f3ef;
-  --hb-adc: #3b7d84;  --hb-bar: #4f8a73;
+  --hb-ok: #1f8a5b;   --hb-ok-bg: #e2f4ea;
+  --hb-warn: #a3620a; --hb-warn-bg: #fdefd6;
+  --hb-bad: #c8384d;  --hb-bad-bg: #fde6e9;
+  --hb-exp: #2f62c9;  --hb-exp-bg: #e5edfc;
+  --hb-ai: #6f47c6;   --hb-ai-bg: #efe9fc;
+  --hb-wait: var(--muted); --hb-wait-bg: var(--surface-2);
+  --hb-adc: #0e8a96;  --hb-bar: #22a06b;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --hb-ok: #93c3ad;   --hb-ok-bg: #20302b;
-    --hb-warn: #e0b868; --hb-warn-bg: #362d1d;
-    --hb-bad: #e9939c;  --hb-bad-bg: #3a2428;
-    --hb-exp: #a2bbe0;  --hb-exp-bg: #232d3d;
-    --hb-ai: #c2aee3;   --hb-ai-bg: #2d283a;
-    --hb-wait: #9aa8a3; --hb-wait-bg: #222d2b;
-    --hb-adc: #7fc1c7;  --hb-bar: #6fae95;
+    --hb-ok: #62d3a2; --hb-ok-bg: #143029; --hb-warn: #f2bd5f; --hb-warn-bg: #3a2c14; --hb-bad: #ff8d9c; --hb-bad-bg: #3d1c25;
+    --hb-exp: #8fb5ff; --hb-exp-bg: #1b2947; --hb-ai: #c6aaff; --hb-ai-bg: #2b2246; --hb-adc: #62d0da; --hb-bar: #3fbf8a;
   }
 }
 :root[data-theme="dark"] {
-  --hb-ok: #93c3ad;   --hb-ok-bg: #20302b;
-  --hb-warn: #e0b868; --hb-warn-bg: #362d1d;
-  --hb-bad: #e9939c;  --hb-bad-bg: #3a2428;
-  --hb-exp: #a2bbe0;  --hb-exp-bg: #232d3d;
-  --hb-ai: #c2aee3;   --hb-ai-bg: #2d283a;
-  --hb-wait: #9aa8a3; --hb-wait-bg: #222d2b;
-  --hb-adc: #7fc1c7;  --hb-bar: #6fae95;
+  --hb-ok: #62d3a2; --hb-ok-bg: #143029; --hb-warn: #f2bd5f; --hb-warn-bg: #3a2c14; --hb-bad: #ff8d9c; --hb-bad-bg: #3d1c25;
+  --hb-exp: #8fb5ff; --hb-exp-bg: #1b2947; --hb-ai: #c6aaff; --hb-ai-bg: #2b2246; --hb-adc: #62d0da; --hb-bar: #3fbf8a;
 }
 .late-t { color: var(--late); }
 .nowrap { white-space: nowrap; }
@@ -600,3 +595,16 @@ button.link + button.link { margin-left: 0.8rem; }
 @media (max-width: 860px) { .hb-card.hb-wide { grid-column: auto; } }
 .hb-tbl th:first-child, .hb-tbl td.hb-name { position: sticky; left: 0; background: var(--surface); z-index: 1; }
 .hb-row:hover td.hb-name, .hb-row.open td.hb-name { background: var(--surface-2); }
+
+/* Barra lateral con tokens propios (por defecto igual que el resto) */
+.side { background: var(--side-bg, var(--surface)); color: var(--side-ink, var(--ink)); border-right-color: var(--side-line, var(--line)); }
+.side nav a { color: var(--side-ink, var(--ink)); }
+.side nav a:hover { background: var(--side-hover, var(--surface-2)); }
+.side nav a.on { background: var(--side-on-bg, color-mix(in srgb, var(--primary) 12%, transparent)); color: var(--side-on-ink, var(--primary)); }
+.side nav a.nav-new { background: var(--primary); color: var(--primary-ink); }
+.side .me button.link { color: var(--side-link, var(--primary)); }
+.side .seg { border-color: var(--side-line, var(--line)); }
+.side .seg button { background: var(--side-seg, var(--surface)); color: var(--side-ink, var(--ink)); }
+.side .seg button + button { border-left-color: var(--side-line, var(--line)); }
+.side .seg button.on { background: var(--primary); color: var(--primary-ink); }
+.mark i { mix-blend-mode: var(--mark-blend, multiply); }
