@@ -72,10 +72,13 @@ export function createApi() {
           sb.from("bamboo_sync_log").select("*").order("started_at", { ascending: false }).limit(15).then(check),
         ]);
         const out = { available: true, employees, days, goals, training, pto, log };
+        // Feriados y cambios por persona: los ven todos los líderes (si las tablas aún no existen, quedan vacíos)
+        const suave = (t, orden) => todo(() => (orden ? sb.from(t).select("*").order(orden, { ascending: false }) : sb.from(t).select("*"))).catch(() => []);
+        const [holidays, config, choices, moves] = await Promise.all([suave("rule_holidays"), suave("rule_config"), suave("holiday_choices"), suave("holiday_moves")]);
+        out.rules = { holidays, config, choices, moves };
         if (admin) {
-          const [schedules, holidays, excluded, config] = await Promise.all(["rule_schedules", "rule_holidays", "rule_excluded", "rule_config"]
-            .map((t) => todo(() => sb.from(t).select("*"))));
-          out.rules = { schedules, holidays, excluded, config };
+          const [schedules, excluded, changes] = await Promise.all([suave("rule_schedules"), suave("rule_excluded"), suave("rule_changes", "at")]);
+          Object.assign(out.rules, { schedules, excluded, changes: changes.slice(0, 200) });
         }
         return out;
       } catch (e) {
@@ -91,6 +94,13 @@ export function createApi() {
       }
       if (data?.error) throw new Error(data.error);
       return data;
+    },
+    // Tras un cambio de feriado: pide actualizar (el servidor lo limita a una vez cada 3 min)
+    async requestSync() {
+      try { const { data } = await sb.functions.invoke("bamboo-sync", { body: { source: "regla" } }); return data; } catch (_) { return null; }
+    },
+    async removeWhere(table, match) {
+      return check(await sb.from(table).delete().match(match));
     },
     async upsert(table, rows) {
       return check(await sb.from(table).upsert(rows).select());

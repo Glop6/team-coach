@@ -14,6 +14,7 @@ export const useApp = () => useContext(Ctx);
 // ---------------------------------------------------------------------
 let LANG = "es";
 try { LANG = localStorage.getItem("tc-lang") || "es"; } catch (_) {}
+export const getLang = () => LANG;
 export const t = (s, vars) => {
   let out = LANG === "en" ? EN[s] ?? s : s;
   if (vars) for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v);
@@ -1472,7 +1473,7 @@ function Shell({ api, session, onLang }) {
     case "validar": page = isAdmin ? html`<${ValidateView} />` : null; break;
     case "accesos": page = isAdmin ? html`<${AccessView} />` : null; break;
     case "horas": page = html`<${HorasView} />`; break;
-    case "reglas": page = isAdmin ? html`<${ReglasView} />` : null; break;
+    case "reglas": page = html`<${ReglasView} />`; break;
     default: page = html`<${TeamView} />`;
   }
   const nav = [
@@ -1481,7 +1482,7 @@ function Shell({ api, session, onLang }) {
     ["reuniones", t("Reuniones"), null],
     ["pendientes", t("Pendientes"), lateCount || null],
     ["ideas", t("Banco de ideas"), null],
-    ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : []),
+    ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : [["reglas", t("Feriados"), null]]),
   ];
   const active = { persona: "equipo", reunion: "reuniones", revisar: "reuniones" }[route.page] ?? route.page;
 
