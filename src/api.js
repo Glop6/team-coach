@@ -33,6 +33,12 @@ export function createApi() {
       if (error) throw new Error(error.message);
       await sb.rpc("password_changed");
     },
+    async markSeen(kind) {
+      const { data: u } = await sb.auth.getUser();
+      if (!u?.user) return;
+      const { error } = await sb.from("user_seen").upsert({ user_id: u.user.id, kind, seen_at: new Date().toISOString() }, { onConflict: "user_id,kind" });
+      if (error) throw new Error(error.message);
+    },
     async loadAll() {
       const res = await Promise.all(
         TABLES.map((t) => sb.from(t).select("*").limit(5000))
@@ -42,6 +48,8 @@ export function createApi() {
       // Incidencias (Cambio 18): si la tabla aún no existe, la app sigue igual
       { const { data: inc, error: ie } = await sb.from("incidents").select("*").order("occurred_on", { ascending: false }).order("created_at", { ascending: false }).limit(3000);
         out.incidents = ie ? [] : inc ?? []; out.incidents_error = ie ? ie.message : null; }
+      // Campanita (Cambio 19): hasta cuándo revisé cada sección. Sin la tabla, todo sigue igual.
+      { const { data: us, error: ue } = await sb.from("user_seen").select("*"); out.user_seen = ue ? [] : us ?? []; out.user_seen_error = ue ? ue.message : null; }
       // Quiénes son líderes (aunque no sean de mis grupos)
       try { const { data: lids } = await sb.rpc("lead_ids"); out.lead_ids = (lids ?? []).map((x) => (typeof x === "string" ? x : x.lead_ids ?? Object.values(x)[0])); } catch (_) { out.lead_ids = []; }
       // Reuniones que Gus compartió con un lead: solo resumen y temas

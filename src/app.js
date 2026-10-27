@@ -4,7 +4,7 @@ import htm from "htm";
 import { EN } from "./i18n.js";
 import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
 import { HorasView, ReglasView, BambooPersonBlock } from "./bamboo.js";
-import { IncidenciasView, IncidenciasPersona, conteoMes, umbral } from "./incidencias.js";
+import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe } from "./incidencias.js";
 
 const html = htm.bind(h);
 const Ctx = createContext(null);
@@ -1535,11 +1535,96 @@ function CredModal({ person, profile, onClose }) {
 // ---------------------------------------------------------------------
 // App
 // ---------------------------------------------------------------------
+// ---------------------------------------------------------------------
+// Campanita (Cambio 19): lo mío, con enlace a donde vive cada cosa
+// ---------------------------------------------------------------------
+const MS_DIA = 86400000;
+const tsDia = (d) => new Date(d + "T00:00:00").getTime();
+
+export function campana(ctx) {
+  const { data, isAdmin, me, session, bamboo, idx } = ctx;
+  const yo = session.user.id;
+  const grupos = [];
+  // 1) Incidencias nuevas
+  const incs = nuevas(ctx);
+  if (incs.length) grupos.push({ k: "inc", href: "#/incidencias", titulo: t("Incidencias nuevas"),
+    items: incs.map((i) => ({ id: "i" + i.id, txt: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + t(i.category), when: new Date(i.created_at).getTime() })) });
+  // 2) Mis pendientes vencidos o que vencen en 2 días
+  const mio = (a) => (me?.person_id ? a.owner_id === me.person_id : false) || (isAdmin && !a.owner_id);
+  const pend = data.actions.filter((a) => OPEN.includes(a.status) && a.due_date && mio(a) && daysUntil(a.due_date) <= 2)
+    .sort((a, b) => a.due_date.localeCompare(b.due_date));
+  if (pend.length) grupos.push({ k: "pend", href: "#/pendientes", titulo: t("Mis pendientes"),
+    items: pend.map((a) => { const d = daysUntil(a.due_date);
+      return { id: "a" + a.id + (d < 0 ? "v" : "p"), late: d < 0, txt: (d < 0 ? t("Vencido") : d === 0 ? t("Vence hoy") : d === 1 ? t("Vence mañana") : t("Vence en {n} días", { n: d })) + " · " + a.body,
+        when: d < 0 ? tsDia(a.due_date) + MS_DIA : tsDia(a.due_date) - 2 * MS_DIA }; }) });
+  // 3) Reuniones por revisar
+  const reus = data.meetings.filter((m) => !m.shared && m.created_by === yo && (m.status === "borrador" || m.status === "analizado"));
+  const rev = reus.map((m) => ({ id: "m" + m.id + m.status, href: m.status === "analizado" ? "#/revisar/" + m.id : "#/reunion/" + m.id,
+    txt: (idx.person(m.person_id)?.full_name ?? t("Reunión")) + " · " + (m.status === "analizado" ? t("Revisar y aplicar") : t("Sin analizar")), when: new Date(m.created_at).getTime() }));
+  if (isAdmin) {
+    for (const x of data.suggestions.filter((x) => x.status === "propuesta")) rev.push({ id: "s" + x.id, href: "#/validar", txt: t("Sugerencia por validar"), when: new Date(x.created_at ?? 0).getTime() });
+    for (const r of data.reviews.filter((r) => r.status === "pendiente")) rev.push({ id: "r" + r.id, href: "#/validar", txt: t("Revisión pendiente"), when: new Date(r.created_at ?? 0).getTime() });
+  }
+  if (rev.length) grupos.push({ k: "reu", href: isAdmin && !reus.length ? "#/validar" : "#/reuniones", titulo: t("Reuniones por revisar"), items: rev });
+  // 4) Personas sobre el umbral (de mi gente)
+  if (!data.incidents_error) {
+    const lim = umbral(bamboo), mes = today().slice(0, 7);
+    const sobre = [];
+    for (const [k, n] of conteoMes(data.incidents, mes)) {
+      if (n < lim) continue;
+      const del = data.incidents.filter((i) => !i.voided && String(i.occurred_on).startsWith(mes) && (i.person_id ?? "b:" + i.bamboo_id) === k)
+        .sort((a, b) => a.created_at.localeCompare(b.created_at));
+      if (!del.length || esMia(ctx, del[0])) continue;
+      sobre.push({ id: "u" + k + n, txt: t("{p}: {n} en el mes", { p: nombreDe(ctx, del[0]), n }), when: new Date(del[lim - 1]?.created_at ?? del[0].created_at).getTime() });
+    }
+    if (sobre.length) grupos.push({ k: "umb", href: "#/incidencias", titulo: t("Sobre el umbral ({n})", { n: lim }), items: sobre });
+  }
+  const desde = vistoDesde(ctx, "campana");
+  const sinVer = grupos.reduce((n, g) => n + g.items.filter((i) => i.when > desde).length, 0);
+  return { grupos, sinVer, total: grupos.reduce((n, g) => n + g.items.length, 0), desde };
+}
+
+function Campana() {
+  const ctx = useApp();
+  const [open, setOpen] = useState(false);
+  const [desde, setDesde] = useState(0);
+  const c = campana(ctx);
+  const route = useRoute();
+  useEffect(() => setOpen(false), [route.page, route.id]);
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e) => e.key === "Escape" && setOpen(false);
+    const onClick = (e) => !e.target.closest?.(".bell-wrap") && setOpen(false);
+    document.addEventListener("keydown", onKey); document.addEventListener("click", onClick);
+    return () => { document.removeEventListener("keydown", onKey); document.removeEventListener("click", onClick); };
+  }, [open]);
+  const abrir = () => {
+    if (!open) { setDesde(c.desde); ctx.markSeen?.("campana"); }
+    setOpen(!open);
+  };
+  return html`<div class="bell-wrap">
+    <button class="icon bell" aria-label=${t("Avisos")} aria-expanded=${open} onClick=${abrir} title=${t("Avisos")}>
+      <svg viewBox="0 0 24 24" width="19" height="19" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9" /><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0" /></svg>
+      ${c.sinVer > 0 && html`<span class="badge bell-n">${c.sinVer > 99 ? "99+" : c.sinVer}</span>`}
+    </button>
+    ${open && html`<div class="bell-pop" role="dialog" aria-label=${t("Avisos")}>
+      <div class="bell-head"><strong>${t("Avisos")}</strong><span class="small muted">${c.total ? t("{n} cosas tuyas", { n: c.total }) : ""}</span></div>
+      ${c.grupos.length === 0 ? html`<p class="muted small bell-empty">${t("Todo al día. No hay nada pendiente tuyo.")}</p>`
+        : c.grupos.map((g) => html`<div class="bell-g" key=${g.k}>
+          <a class="bell-gt" href=${g.href}><span>${g.titulo}</span><span class="pill">${g.items.length}</span></a>
+          <ul>${g.items.slice(0, 4).map((i) => html`<li key=${i.id} class=${(i.when > desde ? "is-new" : "") + (i.late ? " late" : "")}><a href=${i.href ?? g.href}>${i.txt}</a></li>`)}</ul>
+          ${g.items.length > 4 && html`<a class="small bell-more" href=${g.href}>${t("Ver las {n}", { n: g.items.length })}</a>`}
+        </div>`)}
+    </div>`}
+  </div>`;
+}
+
 function Shell({ api, session, onLang }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
   const [pwModal, setPwModal] = useState(false);
   const [menu, setMenu] = useState(false);
+  const [seen, setSeen] = useState(null);   // "visto" local (Cambio 19), se sincroniza con user_seen
   const route = useRoute();
 
   const reload = useCallback(async () => {
@@ -1577,7 +1662,14 @@ function Shell({ api, session, onLang }) {
   const reviewsPending = data.reviews.filter((r) => r.status === "pendiente").length;
   const toReview = data.suggestions.filter((s) => s.status === "propuesta").length + reviewsPending;
   const lateCount = data.actions.filter(isOverdue).length;
-  const ctx = { api, data, reload, idx, me: profile, isAdmin, session, reviewsPending, bamboo, reloadBamboo };
+  const seenRows = seen ?? data.user_seen ?? [];
+  const markSeen = (kind) => {
+    if (data.user_seen_error || !api.markSeen) return;
+    setSeen([...seenRows.filter((x) => x.kind !== kind), { kind, seen_at: new Date().toISOString() }]);
+    api.markSeen(kind).catch(() => {});
+  };
+  const ctx = { api, data, reload, idx, me: profile, isAdmin, session, reviewsPending, bamboo, reloadBamboo, seen: seenRows, markSeen };
+  const incNuevas = data.incidents_error ? 0 : nuevas(ctx).length;
   const setLang = async (l) => { onLang(l); try { await api.rpc("set_lang", { l }); } catch (_) {} };
 
   let page;
@@ -1600,7 +1692,7 @@ function Shell({ api, session, onLang }) {
   const nav = [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
-    ["incidencias", t("Incidencias"), (() => { const lim = umbral(bamboo); return [...conteoMes(data.incidents, today().slice(0, 7)).values()].filter((n) => n >= lim).length || null; })()],
+    ["incidencias", t("Incidencias"), incNuevas || null],
     ["reuniones", t("Reuniones"), null],
     ["pendientes", t("Pendientes"), lateCount || null],
     ["ideas", t("Banco de ideas"), null],
@@ -1612,6 +1704,7 @@ function Shell({ api, session, onLang }) {
     <div class="shell">
       <aside class=${"side" + (menu ? " open" : "")}>
         <div class="brand"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>Team Coach
+          <${Campana} />
           <button class="icon burger" aria-label=${t("Menú")} onClick=${() => setMenu(!menu)}>☰</button></div>
         <nav>
           <a class=${"nav-new" + (active === "nueva" ? " on" : "")} href="#/nueva">${t("Nueva reunión")}</a>
