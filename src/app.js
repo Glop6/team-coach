@@ -635,16 +635,41 @@ function AddToGroup({ lead, onClose }) {
   <//>`;
 }
 
-function PrepPanel({ person, onClose }) {
+// Cambio 17: si ya hay una preparación guardada se muestra primero; generar otra es opcional
+const fmtCuando = (ts) => `${fmtDate(String(ts).slice(0, 10))} ${String(new Date(ts).toTimeString()).slice(0, 5)}`;
+function PrepPanel({ person, onClose, history, onGenerated }) {
   const { api } = useApp();
-  const [prep, setPrep] = useState(null);
+  const previas = (history ?? []).filter((g) => g.kind === "prep");
+  const [sel, setSel] = useState(previas[0] ?? null);
+  const [prep, setPrep] = useState(previas[0]?.result ?? null);
+  const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  useEffect(() => {
-    api.fn("prep", { person_id: person.id, lang: LANG }).then((r) => setPrep(r.prep)).catch((x) => setErr(x.message));
-  }, []);
+  const generar = async () => {
+    setBusy(true); setErr("");
+    try {
+      const r = await api.fn("prep", { person_id: person.id, lang: LANG });
+      const g = r.generation ? { ...r.generation, kind: "prep", result: r.prep } : { id: "nuevo", kind: "prep", result: r.prep, created_at: new Date().toISOString(), created_by_name: t("tú") };
+      setPrep(r.prep); setSel(g); onGenerated?.(g);
+    } catch (x) { setErr(x.message); }
+    setBusy(false);
+  };
+  useEffect(() => { if (!previas.length) generar(); }, []);
+  const otraVez = () => {
+    if (sel && !confirm(t("Ya hay una preparación del {d}. ¿Generar otra con IA?", { d: fmtCuando(sel.created_at) }))) return;
+    generar();
+  };
+  const lista = sel && !previas.some((g) => g.id === sel.id) ? [sel, ...previas] : previas;
   const List = ({ title, items }) => items?.length ? html`<section><h3>${title}</h3><ul>${items.map((i) => html`<li>${i}</li>`)}</ul></section>` : null;
   return html`<${Modal} title=${t("Próxima reunión con {n}", { n: firstName(person.full_name) })} onClose=${onClose} wide>
-    ${err ? html`<p class="error">${err}</p>` : !prep ? html`<${Busy} label=${t("La IA está revisando el historial…")} />` : html`<div class="prep">
+    ${sel && !busy && html`<div class="ai-bar">
+      <span class="small"><span class="pill ai-pill">IA</span> ${t("Generado con IA por {p} · {d}", { p: sel.created_by_name ?? "—", d: fmtCuando(sel.created_at) })}</span>
+      <span class="row">
+        ${lista.length > 1 && html`<select class="mini" value=${sel.id} onChange=${(e) => { const g = lista.find((x) => x.id === e.target.value); setSel(g); setPrep(g.result); }} aria-label=${t("Versiones anteriores")}>
+          ${lista.map((g) => html`<option value=${g.id}>${fmtCuando(g.created_at)} · ${g.created_by_name ?? "—"}</option>`)}</select>`}
+        <button onClick=${otraVez}>${t("Generar de nuevo")}</button>
+      </span>
+    </div>`}
+    ${err ? html`<p class="error">${err}</p>` : busy || !prep ? html`<${Busy} label=${t("La IA está revisando el historial…")} />` : html`<div class="prep">
       <p class="lede">${prep.headline}</p>
       <div class="prep-grid">
         <${List} title=${t("Lo que quedó la última vez")} items=${prep.last_time} />
@@ -659,9 +684,10 @@ function PrepPanel({ person, onClose }) {
   <//>`;
 }
 
-function IdeasModal({ person, onClose }) {
+function IdeasModal({ person, onClose, history }) {
   const { api, reload } = useApp();
   const [focus, setFocus] = useState("");
+  const previas = (history ?? []).filter((g) => g.kind === "ideas");
   const [busy, setBusy] = useState(false);
   const run = async (e) => {
     e.preventDefault(); setBusy(true);
@@ -671,6 +697,7 @@ function IdeasModal({ person, onClose }) {
   return html`<${Modal} title=${t("Nuevas ideas para {n}", { n: firstName(person.full_name) })} onClose=${onClose}>
     <form class="stack" onSubmit=${run}>
       <p class="muted">${t("La IA revisa su historial y lo que ya funcionó o no, y propone 3 métodos. Quedan como propuestas hasta que las valides.")}</p>
+      ${previas.length > 0 && html`<div class="ai-prev"><h3>${t("Ya generado con IA")}</h3>${previas.slice(0, 5).map((g) => html`<p class="small"><span class="pill ai-pill">IA</span> <b>${fmtCuando(g.created_at)}</b> · ${g.created_by_name ?? "—"}${g.result?.focus ? ` · ${t("enfoque")}: ${g.result.focus}` : ""}<br /><span class="muted">${(g.result?.titles ?? []).join(" · ")}</span></p>`)}</div>`}
       <label>${t("¿En qué quieres enfocarte? (opcional)")}<input value=${focus} onInput=${(e) => setFocus(e.target.value)} placeholder=${t("Ej.: que pregunte con toda la info")} /></label>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${busy ? t("Pensando…") : t("Proponer ideas")}</button></div>
     </form>
@@ -678,8 +705,10 @@ function IdeasModal({ person, onClose }) {
 }
 
 function PersonView({ id }) {
-  const { data, idx, isAdmin, me } = useApp();
+  const { data, idx, isAdmin, me, api } = useApp();
   const [modal, setModal] = useState(null);
+  const [aiHist, setAiHist] = useState(null);
+  useEffect(() => { api.aiHistory ? api.aiHistory(id).then(setAiHist).catch(() => setAiHist([])) : setAiHist([]); }, [id, modal === null]);
   const p = idx.person(id);
   if (!p) return html`<section class="page"><${Empty}>${t("No encontré a esta persona o no tienes acceso.")}<//></section>`;
   const g = idx.group(p.group_id);
@@ -725,6 +754,7 @@ function PersonView({ id }) {
       </div>
       <div class="head-actions">
         <button class="primary" onClick=${() => setModal("prep")}>${t("Preparar reunión")}</button>
+        ${(() => { const u = (aiHist ?? []).find((g) => g.kind === "prep"); return u ? html`<span class="small muted ai-last" title=${t("Generado con IA por {p} · {d}", { p: u.created_by_name ?? "—", d: fmtCuando(u.created_at) })}>${t("Última: {d} · {p}", { d: fmtDate(String(u.created_at).slice(0, 10)), p: firstName(u.created_by_name ?? "") })}</span>` : null; })()}
         ${(isAdmin || (!isMe && !idx.isLead(p.id))) && html`<button onClick=${() => setModal("note")}>${t("Agregar nota")}</button>`}
         ${isAdmin && html`<button onClick=${() => setModal("ideas")}>${t("Ideas con IA")}</button>`}
         ${isAdmin && html`<button class="icon" title=${t("Editar")} aria-label=${t("Editar persona")} onClick=${() => setModal("edit")}>✎</button>`}
@@ -777,8 +807,8 @@ function PersonView({ id }) {
     </div>
 
     ${modal === "note" && html`<${AddNote} person=${p} onClose=${() => setModal(null)} />`}
-    ${modal === "prep" && html`<${PrepPanel} person=${p} onClose=${() => setModal(null)} />`}
-    ${modal === "ideas" && html`<${IdeasModal} person=${p} onClose=${() => setModal(null)} />`}
+    ${modal === "prep" && aiHist !== null && html`<${PrepPanel} person=${p} history=${aiHist} onClose=${() => setModal(null)} onGenerated=${(g) => setAiHist([g, ...(aiHist ?? [])])} />`}
+    ${modal === "ideas" && html`<${IdeasModal} person=${p} history=${aiHist} onClose=${() => setModal(null)} />`}
     ${modal === "edit" && html`<${EditPerson} person=${p} onClose=${() => setModal(null)} />`}
     ${modal === "add" && html`<${AddToGroup} lead=${p} onClose=${() => setModal(null)} />`}
   </section>`;

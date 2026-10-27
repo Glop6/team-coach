@@ -96,6 +96,11 @@ export function createApi() {
       return data;
     },
     // Tras un cambio de feriado: pide actualizar (el servidor lo limita a una vez cada 3 min)
+    // Historial de IA de una persona (si la tabla aún no existe, vacío)
+    async aiHistory(personId) {
+      const { data, error } = await sb.from("ai_generations").select("*").eq("person_id", personId).order("created_at", { ascending: false }).limit(30);
+      return error ? [] : data ?? [];
+    },
     async requestSync() {
       try { const { data } = await sb.functions.invoke("bamboo-sync", { body: { source: "regla" } }); return data; } catch (_) { return null; }
     },
