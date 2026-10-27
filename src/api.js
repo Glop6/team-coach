@@ -39,6 +39,9 @@ export function createApi() {
       );
       const out = {};
       TABLES.forEach((t, i) => (out[t] = check(res[i]) ?? []));
+      // Incidencias (Cambio 18): si la tabla aún no existe, la app sigue igual
+      { const { data: inc, error: ie } = await sb.from("incidents").select("*").order("occurred_on", { ascending: false }).order("created_at", { ascending: false }).limit(3000);
+        out.incidents = ie ? [] : inc ?? []; out.incidents_error = ie ? ie.message : null; }
       // Quiénes son líderes (aunque no sean de mis grupos)
       try { const { data: lids } = await sb.rpc("lead_ids"); out.lead_ids = (lids ?? []).map((x) => (typeof x === "string" ? x : x.lead_ids ?? Object.values(x)[0])); } catch (_) { out.lead_ids = []; }
       // Reuniones que Gus compartió con un lead: solo resumen y temas

@@ -627,3 +627,36 @@ button.link + button.link { margin-left: 0.8rem; }
 .ai-prev { background: var(--surface-2); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; }
 .ai-prev p { margin: 0.35rem 0; }
 .ai-last { align-self: center; }
+
+/* ===== Cambio 18: incidencias, preparación dividida ===== */
+.lbl { display: block; font-weight: 550; font-size: 0.9rem; margin-bottom: 0.35rem; }
+.mt-s { margin-top: 0.5rem; }
+.inc-cats { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+.chip-btn { padding: 0.35rem 0.8rem; font-size: 0.88rem; }
+.chip-btn.on { background: var(--primary); border-color: var(--primary); color: var(--primary-ink); }
+.pill.sev-leve { background: var(--hb-warn-bg); color: var(--hb-warn); }
+.pill.sev-moderada { background: color-mix(in srgb, var(--late) 14%, transparent); color: var(--late); }
+.pill.sev-critica { background: var(--late); color: #fff; }
+.inc-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 0.5rem; }
+.inc { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.6rem 0.85rem; }
+.inc.voided { opacity: 0.6; }
+.inc.voided .inc-main strong, .inc.voided .inc-main .pill { text-decoration: line-through; }
+.inc-main { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.6rem; }
+.inc p { margin: 0.3rem 0 0; }
+.inc-acts { display: flex; gap: 0.2rem; margin-top: 0.2rem; }
+.inc-void { color: var(--muted); font-style: italic; }
+.inc-sum tbody tr { cursor: pointer; }
+.inc-sum tbody tr.on td { background: var(--surface-2); }
+.prep-page .page-head { margin-bottom: 1rem; }
+.prep-split { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: 1.4rem; align-items: start; }
+.prep-split.solo { grid-template-columns: minmax(0, 1fr); max-width: 900px; }
+.prep-col { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: 1.1rem 1.2rem; min-width: 0; }
+.notes-col { position: sticky; top: 1rem; }
+.notes-col textarea.big { min-height: 46vh; }
+.prep-split:not(.solo) .prep-grid { grid-template-columns: 1fr 1fr; }
+.prep-sum { background: color-mix(in srgb, var(--primary) 7%, transparent); border-radius: var(--radius); padding: 0.7rem 1rem 0.5rem; margin-bottom: 0.8rem; }
+.prep-sum ul { margin: 0.2rem 0 0.3rem; padding-left: 1.1rem; }
+.prep-sum li { margin: 0.25rem 0; }
+.prep-more { margin-top: 0.8rem; }
+.prep-more > summary { cursor: pointer; color: var(--primary); font-weight: 600; }
+@media (max-width: 1000px) { .prep-split { grid-template-columns: 1fr; } .notes-col { position: static; } }
