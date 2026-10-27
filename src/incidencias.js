@@ -2,12 +2,13 @@
 //  Incidencias (Cambio 18)
 //  · Manuales: el líder las anota en segundos (categoría, gravedad, nota).
 //  · Automáticas: Bamboo, cada lunes 8:00, una por persona y semana.
-//  · Nunca se borran: se anulan con motivo. Aviso a la persona por correo (lo envía el líder).
+//  · Nunca se borran: se anulan con motivo y se pueden reactivar (queda historial).
+//  · Cambio 19: cada uno ve las suyas (solo lectura); las nuevas salen en la campanita.
 // =====================================================================
 import { h } from "preact";
-import { useState, useMemo } from "preact/hooks";
+import { useState, useEffect } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName, getLang } from "./app.js";
+import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -31,9 +32,25 @@ export function nombreDe(ctx, inc) {
   return (ctx.bamboo?.employees ?? []).find((e) => e.bamboo_id === inc.bamboo_id)?.full_name ?? "—";
 }
 
-function correoDe(ctx, inc) {
-  const p = inc.person_id && ctx.idx.person(inc.person_id);
-  return p?.email || (ctx.bamboo?.employees ?? []).find((e) => e.bamboo_id === inc.bamboo_id || (p && e.person_id === p.id))?.email || "";
+/** Es una incidencia mía (sobre mí). Las veo, pero no las anulo ni las edito. */
+export function esMia(ctx, inc) {
+  const pid = ctx.me?.person_id;
+  if (!pid) return false;
+  const bid = ctx.idx.person(pid)?.bamboo_id;
+  return inc.person_id === pid || (!!bid && inc.bamboo_id === bid);
+}
+
+const SIETE_DIAS = 7 * 86400000;
+/** Desde cuándo cuenta lo "nuevo" de una sección (si nunca la abrió: últimos 7 días). */
+export function vistoDesde(ctx, kind) {
+  const r = (ctx.seen ?? ctx.data.user_seen ?? []).find((x) => x.kind === kind);
+  return r ? new Date(r.seen_at).getTime() : Date.now() - SIETE_DIAS;
+}
+
+/** Incidencias nuevas para mí: activas, creadas desde la última vez que abrí Incidencias y no anotadas por mí. */
+export function nuevas(ctx, desde = vistoDesde(ctx, "incidents")) {
+  const yo = ctx.session?.user?.id;
+  return (ctx.data.incidents ?? []).filter((i) => !i.voided && i.created_by !== yo && new Date(i.created_at).getTime() > desde);
 }
 
 /** Conteo del mes (sin anuladas) por persona. */
@@ -62,7 +79,6 @@ export function IncidentForm({ person, onClose }) {
   const [sev, setSev] = useState("leve");
   const [fecha, setFecha] = useState(today());
   const [nota, setNota] = useState("");
-  const [avisar, setAvisar] = useState(true);
   const [busy, setBusy] = useState(false);
   const guardar = async (e) => {
     e.preventDefault();
@@ -71,9 +87,8 @@ export function IncidentForm({ person, onClose }) {
     if (!categoria) return toast(t("Elige una categoría."), "bad");
     setBusy(true);
     try {
-      const [row] = await api.insert("incidents", [{ person_id: pid, category: categoria, severity: sev, occurred_on: fecha, note: nota.trim() || null }]);
+      await api.insert("incidents", [{ person_id: pid, category: categoria, severity: sev, occurred_on: fecha, note: nota.trim() || null }]);
       toast(t("Incidencia registrada"));
-      if (avisar && row) abrirAviso(ctx, row, true);
       await reload(); onClose();
     } catch (x) { toast(x.message, "bad"); }
     setBusy(false);
@@ -91,24 +106,9 @@ export function IncidentForm({ person, onClose }) {
         <label>${t("Fecha")}<input type="date" value=${fecha} onInput=${(e) => setFecha(e.target.value)} /></label>
       </div>
       <label>${t("Nota (opcional)")}<input value=${nota} onInput=${(e) => setNota(e.target.value)} placeholder=${t("Ej.: respondió al cliente sin revisar el caso")} /></label>
-      <label class="check"><input type="checkbox" checked=${avisar} onChange=${(e) => setAvisar(e.target.checked)} />${t("Avisar a la persona por correo (se abre tu correo con el mensaje listo)")}</label>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Registrar")}</button></div>
     </form>
   <//>`;
-}
-
-/** Abre el correo del líder con el aviso listo y marca la incidencia como avisada. */
-export async function abrirAviso(ctx, inc, nueva = false) {
-  const para = correoDe(ctx, inc);
-  const nombre = firstName(nombreDe(ctx, inc));
-  const en = getLang() === "en";
-  const asunto = en ? `Incident logged: ${inc.category}` : `Incidencia registrada: ${inc.category}`;
-  const cuerpo = en
-    ? `Hi ${nombre},\n\nI'm letting you know an incident was logged on ${inc.occurred_on}: ${inc.category} (${inc.severity}).\n${inc.detail || inc.note || ""}\n\nLet's talk about it in our next meeting. If something doesn't look right, tell me.\n`
-    : `Hola ${nombre},\n\nTe aviso que se registró una incidencia el ${inc.occurred_on}: ${inc.category} (${t(GRAVEDAD[inc.severity] ?? inc.severity).toLowerCase()}).\n${inc.detail || inc.note || ""}\n\nLo conversamos en nuestra próxima reunión. Si algo no está bien, avísame.\n`;
-  if (!para) toast(t("No tengo el correo de esta persona; completa el mensaje con su correo."), "bad");
-  window.location.href = `mailto:${encodeURIComponent(para)}?subject=${encodeURIComponent(asunto)}&body=${encodeURIComponent(cuerpo)}`;
-  try { await ctx.api.update("incidents", inc.id, { notified_at: new Date().toISOString() }); if (!nueva) ctx.reload(); } catch (_) {}
 }
 
 function Anular({ inc, onClose }) {
@@ -125,28 +125,46 @@ function Anular({ inc, onClose }) {
   };
   return html`<${Modal} title=${t("Anular incidencia")} onClose=${onClose}>
     <form class="stack" onSubmit=${go2}>
-      <p class="muted small">${t("No se borra: queda anulada con el motivo, quién y cuándo. Gus ve todas las anulaciones.")}</p>
+      <p class="muted small">${t("No se borra: queda anulada con el motivo, quién y cuándo. Puedes reactivarla después; queda en el historial.")}</p>
       <label>${t("Motivo")}<input value=${motivo} onInput=${(e) => setMotivo(e.target.value)} placeholder=${t("Ej.: el cliente pidió mover la entrega")} /></label>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Anular")}</button></div>
     </form>
   <//>`;
 }
 
-export function IncidentRow({ inc, showPerson = true }) {
+async function reactivar(ctx, inc) {
+  if (!confirm(t("¿Reactivar esta incidencia? Vuelve a contar y queda en el historial."))) return;
+  try { await ctx.api.update("incidents", inc.id, { voided: false }); toast(t("Incidencia reactivada")); ctx.reload(); }
+  catch (x) { toast(x.message, "bad"); }
+}
+
+const fechaHora = (ts) => (ts ? fmtDate(String(ts).slice(0, 10)) : "—");
+
+export function IncidentRow({ inc, showPerson = true, nueva = false }) {
   const ctx = useApp();
   const [anular, setAnular] = useState(false);
+  const [hist, setHist] = useState(false);
   const auto = inc.source === "bamboo";
-  return html`<li class=${"inc" + (inc.voided ? " voided" : "")}>
+  const mia = esMia(ctx, inc) && !ctx.isAdmin;
+  const puedeReactivar = ctx.isAdmin || (!!inc.voided_by && inc.voided_by === ctx.session?.user?.id);
+  const historial = Array.isArray(inc.history) ? inc.history : [];
+  return html`<li class=${"inc" + (inc.voided ? " voided" : "") + (nueva ? " is-new" : "")}>
     <div class="inc-main">
+      ${nueva && html`<span class="pill new-pill">${t("Nueva")}</span>`}
       <span class="small muted nowrap">${fmtDate(inc.occurred_on)}</span>
       ${showPerson && html`<strong>${inc.person_id ? html`<${PersonLink} id=${inc.person_id} />` : nombreDe(ctx, inc)}</strong>`}
       <span class="pill">${t(inc.category)}</span><${SevPill} s=${inc.severity} />
       ${auto ? html`<span class="small muted">${t("Automática (Bamboo)")}</span>` : html`<span class="small muted">${t("por {p}", { p: inc.created_by_name ?? "—" })}</span>`}
-      ${inc.notified_at && html`<span class="small muted" title=${t("Avisado por {p}", { p: inc.notified_by_name ?? "—" })}>✉ ${t("avisada")}</span>`}
     </div>
     ${(inc.detail || inc.note) && html`<p class="small">${inc.detail || ""}${inc.detail && inc.note ? " · " : ""}${inc.note || ""}</p>`}
-    ${inc.voided ? html`<p class="small inc-void">${t("Anulada por {p} ({d}): {m}", { p: inc.voided_by_name ?? "—", d: fmtDate(String(inc.voided_at ?? "").slice(0, 10)), m: inc.void_reason })}</p>`
-      : html`<div class="inc-acts"><button class="link small" onClick=${() => abrirAviso(ctx, inc)}>${t("Avisar")}</button><button class="link small late-t" onClick=${() => setAnular(true)}>${t("Anular")}</button></div>`}
+    ${inc.voided && html`<p class="small inc-void">${t("Anulada por {p} ({d}): {m}", { p: inc.voided_by_name ?? "—", d: fechaHora(inc.voided_at), m: inc.void_reason })}</p>`}
+    ${(!mia || historial.length > 0) && html`<div class="inc-acts">
+      ${!mia && (inc.voided
+        ? puedeReactivar && html`<button class="link small" onClick=${() => reactivar(ctx, inc)}>${t("Reactivar")}</button>`
+        : html`<button class="link small late-t" onClick=${() => setAnular(true)}>${t("Anular")}</button>`)}
+      ${historial.length > 0 && html`<button class="link small" aria-expanded=${hist} onClick=${() => setHist(!hist)}>${t("Historial ({n})", { n: historial.length })}</button>`}
+    </div>`}
+    ${hist && html`<ol class="inc-hist small muted">${historial.map((h) => html`<li>${fechaHora(h.cuando)} · ${h.accion === "anulada" ? t("Anulada por {p}: {m}", { p: h.por ?? "—", m: h.motivo ?? "" }) : t("Reactivada por {p}", { p: h.por ?? "—" })}</li>`)}</ol>`}
     ${anular && html`<${Anular} inc=${inc} onClose=${() => setAnular(false)} />`}
   </li>`;
 }
@@ -162,7 +180,13 @@ export function IncidenciasView() {
   const [quien, setQuien] = useState("");
   const [verAnuladas, setVerAnuladas] = useState(false);
   const [soloAuto, setSoloAuto] = useState("todas");
-  const incs = data.incidents ?? [];
+  // Lo nuevo se calcula con el "visto" de cuando entré; al entrar queda todo como visto.
+  const [desde] = useState(() => vistoDesde(ctx, "incidents"));
+  const nuevasIds = new Set(nuevas(ctx, desde).map((i) => i.id));
+  useEffect(() => { if (!data.incidents_error) ctx.markSeen?.("incidents"); }, []);
+  const todasVis = data.incidents ?? [];
+  const mias = isAdmin ? [] : todasVis.filter((i) => esMia(ctx, i));
+  const incs = isAdmin ? todasVis : todasVis.filter((i) => !esMia(ctx, i));
   if (data.incidents_error) return html`<section class="page narrow"><h1>${t("Incidencias")}</h1><p class="warn mt">${isAdmin ? t("Falta correr 12_incidencias.sql en Supabase.") : t("Todavía no está disponible.")}</p></section>`;
   const lim = umbral(bamboo);
   const delMes = incs.filter((i) => mesDe(i.occurred_on) === mes);
@@ -181,6 +205,7 @@ export function IncidenciasView() {
     <header class="page-head"><div><h1>${t("Incidencias")}</h1>
       <p class="muted">${t("Registro para el coaching: las de Bamboo se crean solas cada lunes a las 8:00; las demás las anota el líder. No se borran: se anulan con motivo.")}</p></div>
       <button class="primary" onClick=${() => setNueva(true)}>+ ${t("Incidencia")}</button></header>
+    ${nuevasIds.size > 0 && html`<p class="inc-new-note small"><span class="pill new-pill">${t("Nueva")}</span> ${nuevasIds.size === 1 ? t("1 incidencia nueva desde tu última visita.") : t("{n} incidencias nuevas desde tu última visita.", { n: nuevasIds.size })}</p>`}
     <div class="row hb-bar">
       <select class="mini" value=${mes} onChange=${(e) => setMes(e.target.value)} aria-label=${t("Mes")}>${meses.map((m) => html`<option value=${m}>${m}</option>`)}</select>
       <div class="seg">${[["todas", t("Todas")], ["manual", t("Manuales")], ["auto", t("Bamboo")]].map(([k, l]) => html`<button class=${soloAuto === k ? "on" : ""} onClick=${() => setSoloAuto(k)}>${l}</button>`)}</div>
@@ -198,7 +223,12 @@ export function IncidenciasView() {
         <td class="right"><b>${r.n}</b></td><td class="right">${r.crit || "—"}</td><td class="right">${r.auto || "—"}</td>
         <td class="right">${r.pid && puedeAnotar(ctx, r.pid) && html`<button class="link small" onClick=${(e) => { e.stopPropagation(); setQuien(r.k); }}>${t("Ver")}</button>`}</td></tr>`)}</tbody></table>`}
     <h2 class="mt">${quien ? t("Incidencias de {n}", { n: resumen.find((r) => r.k === quien)?.nombre ?? "" }) : t("Todas las del mes")}${quien && html` <button class="link small" onClick=${() => setQuien("")}>${t("Ver todas")}</button>`}</h2>
-    ${filtradas.length ? html`<ul class="inc-list">${filtradas.map((i) => html`<${IncidentRow} inc=${i} key=${i.id} />`)}</ul>` : html`<${Empty}>${t("No hay incidencias en este mes.")}<//>`}
+    ${filtradas.length ? html`<ul class="inc-list">${filtradas.map((i) => html`<${IncidentRow} inc=${i} key=${i.id} nueva=${nuevasIds.has(i.id)} />`)}</ul>` : html`<${Empty}>${t("No hay incidencias en este mes.")}<//>`}
+    ${mias.length > 0 && html`<section class="block mt inc-mias">
+      <h2>${t("Mis incidencias")} <span class="small muted">· ${t("solo lectura")}</span></h2>
+      <p class="muted small">${t("Las registraron sobre ti. Si algo no está bien, háblalo con tu líder o con Gus.")}</p>
+      <ul class="inc-list">${mias.filter((i) => verAnuladas || !i.voided).slice(0, 30).map((i) => html`<${IncidentRow} inc=${i} key=${i.id} showPerson=${false} nueva=${nuevasIds.has(i.id)} />`)}</ul>
+    </section>`}
     ${nueva && html`<${IncidentForm} onClose=${() => setNueva(false)} />`}
   </section>`;
 }
