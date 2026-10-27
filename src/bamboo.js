@@ -495,7 +495,7 @@ function Vacaciones({ ix, gs, match }) {
 // ---------------------------------------------------------------------
 // Bloque en el perfil de la persona
 // ---------------------------------------------------------------------
-export function BambooPersonBlock({ person }) {
+export function BambooPersonBlock({ person, enlace = true }) {
   const { bamboo } = useApp();
   const ix = useMemo(() => (bamboo?.available ? indexBamboo(bamboo) : null), [bamboo]);
   if (!ix || !person?.bamboo_id) return null;
@@ -512,7 +512,7 @@ export function BambooPersonBlock({ person }) {
   const v = ix.pto.get(e.bamboo_id);
   const tieneEquipo = (ix.hijos.get(e.bamboo_id) ?? []).length > 0;
   return html`<section class="block hb-person">
-    <div class="row between"><h2>${t("En Bamboo")}</h2><a class="small" href="#/horas">${tieneEquipo ? t("Ver horas de su equipo") : t("Ver todas las horas")} →</a></div>
+    <div class="row between"><h2>${t("En Bamboo")}</h2>${enlace && html`<a class="small" href="#/horas">${tieneEquipo ? t("Ver horas de su equipo") : t("Ver todas las horas")} →</a>`}</div>
     <div class="hb-pgrid">
       <div class="hb-card hb-wide">
         <h3>${t("Semana {a} – {b}", { a: mini(lunes), b: mini(addDays(lunes, 6)) })}</h3>

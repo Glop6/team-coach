@@ -149,15 +149,15 @@ export function Empty({ children }) {
   return html`<p class="empty">${children}</p>`;
 }
 
-export function Modal({ title, onClose, children, wide }) {
+export function Modal({ title, onClose, children, wide, locked }) {
   useEffect(() => {
-    const f = (e) => e.key === "Escape" && onClose();
+    const f = (e) => e.key === "Escape" && !locked && onClose();
     addEventListener("keydown", f);
     return () => removeEventListener("keydown", f);
   }, []);
-  return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && onClose()}>
+  return html`<div class="modal-bg" onClick=${(e) => e.target === e.currentTarget && !locked && onClose()}>
     <div class=${"modal" + (wide ? " wide" : "")} role="dialog" aria-modal="true" aria-label=${title}>
-      <header><h2>${title}</h2><button class="icon" onClick=${onClose} aria-label=${t("Cerrar")}>✕</button></header>
+      <header><h2>${title}</h2>${!locked && html`<button class="icon" onClick=${onClose} aria-label=${t("Cerrar")}>✕</button>`}</header>
       ${children}
     </div>
   </div>`;
@@ -235,8 +235,8 @@ function LangSwitch({ onLang }) {
   </span>`;
 }
 
-function ChangePassword({ onClose }) {
-  const { api } = useApp();
+function ChangePassword({ onClose, forced = false }) {
+  const { api, reload } = useApp();
   const [a, setA] = useState("");
   const [b, setB] = useState("");
   const [err, setErr] = useState("");
@@ -244,15 +244,15 @@ function ChangePassword({ onClose }) {
     e.preventDefault();
     if (a.length < 8) return setErr(t("Usa al menos 8 caracteres."));
     if (a !== b) return setErr(t("Las contraseñas no coinciden."));
-    try { await api.changePassword(a); toast(t("Contraseña cambiada")); onClose(); } catch (x) { setErr(x.message); }
+    try { await api.changePassword(a); toast(t("Contraseña cambiada")); if (forced) reload(); else onClose(); } catch (x) { setErr(x.message); }
   };
-  return html`<${Modal} title=${t("Cambiar contraseña")} onClose=${onClose}>
+  return html`<${Modal} title=${forced ? t("Crea tu contraseña") : t("Cambiar contraseña")} onClose=${onClose} locked=${forced}>
     <form class="stack" onSubmit=${save}>
-      <p class="muted small">${t("Es opcional. Si no la cambias, sigues entrando con la que te dio Gus.")}</p>
+      <p class="muted small">${forced ? t("Bienvenido a Team Coach. Antes de entrar, cambia la contraseña que te dieron por una tuya.") : t("Es opcional. Si no la cambias, sigues entrando con la que te dio Gus.")}</p>
       <label>${t("Nueva contraseña")}<input type="password" autocomplete="new-password" value=${a} onInput=${(e) => setA(e.target.value)} /></label>
       <label>${t("Repítela")}<input type="password" autocomplete="new-password" value=${b} onInput=${(e) => setB(e.target.value)} /></label>
       ${err && html`<p class="error">${err}</p>`}
-      <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary">${t("Cambiar contraseña")}</button></div>
+      <div class="row end">${!forced && html`<button type="button" onClick=${onClose}>${t("Cancelar")}</button>`}<button class="primary">${forced ? t("Guardar y entrar") : t("Cambiar contraseña")}</button></div>
     </form>
   <//>`;
 }
@@ -352,14 +352,20 @@ function TeamView() {
 // Pendientes: fila compacta y tabla con encabezados (Cambio 3)
 // ---------------------------------------------------------------------
 function useActionOps() {
-  const { api, reload, isAdmin, session, me, idx } = useApp();
+  const { api, reload, isAdmin, session, me, idx, alCompletar: onDone } = useApp();
   const myPid = me?.person_id;
   // Cambio 11: Gus edita todo; quien lo creó o el líder de esa persona editan responsable, fecha, prioridad y estado;
   // el responsable solo cambia el estado.
   const canManage = (a) => isAdmin || (a.created_by && a.created_by === session.user.id)
     || (!!a.person_id && a.person_id !== myPid && !!idx.person(a.person_id) && !idx.isLead(a.person_id));
   const canStatus = (a) => canManage(a) || (!!myPid && a.owner_id === myPid);
-  const set = async (a, patch) => { try { await api.update("actions", a.id, patch); await reload(); } catch (x) { toast(x.message, "bad"); } };
+  const set = async (a, patch) => {
+    try {
+      await api.update("actions", a.id, patch);
+      if (onDone && patch.status === "hecho" && a.status !== "hecho") onDone(a);
+      await reload();
+    } catch (x) { toast(x.message, "bad"); }
+  };
   return {
     canManage, canStatus, set,
     toggle: (a) => set(a, { status: a.status === "hecho" ? "pendiente" : "hecho" }),
@@ -385,8 +391,64 @@ function OwnerSelect({ a, onChange }) {
   </select>`;
 }
 
+// Cambio 20: comentarios en pendientes (el líder y la persona)
+const comentariosDe = (data, a) => (data.action_comments ?? []).filter((c) => c.action_id === a.id);
+
+function ComentariosBtn({ a, open, onToggle }) {
+  const { data } = useApp();
+  if (data.action_comments_error) return null;
+  const n = comentariosDe(data, a).length;
+  return html`<button type="button" class=${"link small com-btn" + (n ? " has" : "")} aria-expanded=${open} onClick=${onToggle} title=${t("Comentarios")}>
+    <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>
+    ${n ? n : t("Comentar")}</button>`;
+}
+
+function Comentarios({ a, autoFocus = false }) {
+  const { data, api, reload, session, isAdmin } = useApp();
+  const [txt, setTxt] = useState("");
+  const [busy, setBusy] = useState(false);
+  const lista = comentariosDe(data, a);
+  const enviar = async (e) => {
+    e.preventDefault();
+    if (!txt.trim()) return;
+    setBusy(true);
+    try { await api.insert("action_comments", [{ action_id: a.id, body: txt.trim() }]); setTxt(""); await reload(); }
+    catch (x) { toast(x.message, "bad"); }
+    setBusy(false);
+  };
+  const borrar = async (c) => {
+    if (!confirm(t("¿Borrar este comentario?"))) return;
+    try { await api.remove("action_comments", c.id); reload(); } catch (x) { toast(x.message, "bad"); }
+  };
+  return html`<div class="com-box">
+    ${lista.length > 0 && html`<ul class="com-list">${lista.map((c) => html`<li key=${c.id}>
+      <span class="small"><b>${c.author_name ?? "—"}</b> <span class="muted">· ${fmtDate(String(c.created_at).slice(0, 10))}</span>
+        ${(isAdmin || c.author_id === session.user.id) && html`<button class="icon com-del" aria-label=${t("Borrar comentario")} title=${t("Borrar comentario")} onClick=${() => borrar(c)}>✕</button>`}</span>
+      <p>${c.body}</p></li>`)}</ul>`}
+    <form class="row com-form" onSubmit=${enviar}>
+      <input class="grow" value=${txt} onInput=${(e) => setTxt(e.target.value)} placeholder=${t("Escribe un comentario…")} aria-label=${t("Comentario")} autoFocus=${autoFocus} />
+      <button disabled=${busy || !txt.trim()}>${t("Enviar")}</button>
+    </form>
+  </div>`;
+}
+
+/** Al completar una tarea: ofrecer dejar un comentario. */
+function AlCompletar({ a, onClose }) {
+  const { data } = useApp();
+  if (!a || data.action_comments_error) return null;
+  return html`<${Modal} title=${t("Tarea completada")} onClose=${onClose}>
+    <div class="stack">
+      <p class="muted small">“${a.body}”</p>
+      <p>${t("¿Quieres dejar un comentario? Lo verán el líder y la persona.")}</p>
+      <${Comentarios} a=${a} autoFocus=${true} />
+      <div class="row end"><button class="primary" onClick=${onClose}>${t("Listo")}</button></div>
+    </div>
+  <//>`;
+}
+
 function ActionRow({ a }) {
   const { idx } = useApp();
+  const [com, setCom] = useState(false);
   const ops = useActionOps();
   return html`<li class=${"action s-" + slug(a.status ?? "pendiente")}>
     <input type="checkbox" checked=${a.status === "hecho"} disabled=${!ops.canStatus(a)} onChange=${() => ops.toggle(a)} aria-label=${t("Marcar como hecho")} />
@@ -397,19 +459,22 @@ function ActionRow({ a }) {
         <span class="muted">${t("A cargo de")}: ${firstName(ownerName(idx, a))}</span>
         <${Due} date=${a.due_date} status=${a.status} />
         ${a.private && html`<span class="cat">${t("privada")}</span>`}
+        <${ComentariosBtn} a=${a} open=${com} onToggle=${() => setCom(!com)} />
       </span>
+      ${com && html`<${Comentarios} a=${a} />`}
     </div>
   </li>`;
 }
 
-function ActionTable({ actions, empty }) {
+function ActionTable({ actions, empty, mine = false }) {
   const { idx } = useApp();
+  const [com, setCom] = useState(null);
   const ops = useActionOps();
   if (!actions.length) return html`<${Empty}>${empty ?? t("Sin pendientes.")}<//>`;
-  return html`<div class="atable" role="table">
+  return html`<div class=${"atable" + (mine ? " at-mine" : "")} role="table">
     <div class="at-row at-head" role="row">
-      <span role="columnheader">${t("Tarea")}</span><span role="columnheader">${t("Sobre quién")}</span>
-      <span role="columnheader">${t("A cargo de")}</span><span role="columnheader">${t("Fecha límite")}</span>
+      <span role="columnheader">${t("Tarea")}</span>${!mine && html`<span role="columnheader">${t("Sobre quién")}</span>
+      <span role="columnheader">${t("A cargo de")}</span>`}<span role="columnheader">${t("Fecha límite")}</span>
       <span role="columnheader">${t("Prioridad")}</span><span role="columnheader">${t("Estado")}</span>
     </div>
     ${actions.map((a) => {
@@ -419,9 +484,10 @@ function ActionTable({ actions, empty }) {
       <span class="at-task" role="cell">
         <input type="checkbox" checked=${a.status === "hecho"} disabled=${!st} onChange=${() => ops.toggle(a)} aria-label=${t("Marcar como hecho")} />
         <span>${a.body}${a.private && html` <span class="cat">${t("privada")}</span>`}</span>
+        <${ComentariosBtn} a=${a} open=${com === a.id} onToggle=${() => setCom(com === a.id ? null : a.id)} />
       </span>
-      <span role="cell" data-label=${t("Sobre quién")}>${a.person_id ? html`<${PersonLink} id=${a.person_id} />` : html`<span class="muted">${t("General")}</span>`}</span>
-      <span role="cell" data-label=${t("A cargo de")}>${full ? html`<${OwnerSelect} a=${a} onChange=${(v) => ops.set(a, { owner_id: v })} />` : ownerName(idx, a)}</span>
+      ${!mine && html`<span role="cell" data-label=${t("Sobre quién")}>${a.person_id ? html`<${PersonLink} id=${a.person_id} />` : html`<span class="muted">${t("General")}</span>`}</span>
+      <span role="cell" data-label=${t("A cargo de")}>${full ? html`<${OwnerSelect} a=${a} onChange=${(v) => ops.set(a, { owner_id: v })} />` : ownerName(idx, a)}</span>`}
       <span role="cell" data-label=${t("Fecha límite")}>${full
         ? html`<input type="date" class=${"mini date-in" + (isOverdue(a) ? " late" : "")} value=${a.due_date ?? ""} onChange=${(e) => ops.set(a, { due_date: e.target.value || null })} aria-label=${t("Fecha límite")} />`
         : html`<${Due} date=${a.due_date} status=${a.status} />`}</span>
@@ -435,6 +501,7 @@ function ActionTable({ actions, empty }) {
             ${STATUSES.map((x) => html`<option value=${x}>${t(x)}</option>`)}
           </select>`
         : html`<span class="small">${t(a.status)}</span>`}</span>
+      ${com === a.id && html`<div class="at-com" role="cell"><${Comentarios} a=${a} /></div>`}
     </div>`;
     })}
   </div>`;
@@ -491,16 +558,20 @@ function SuggestionCard({ s, compact }) {
 }
 
 function AddNote({ person, onClose }) {
-  const { api, reload, isAdmin } = useApp();
+  const { api, reload, isAdmin, data } = useApp();
   const [kind, setKind] = useState(isAdmin ? "observación" : "avance");
   const [category, setCategory] = useState("");
   const [body, setBody] = useState("");
   const [priv, setPriv] = useState(false);
+  const [ver, setVer] = useState(false);
+  const conVis = !data.action_comments_error;   // el SQL 14 ya corrió
   const save = async (e) => {
     e.preventDefault();
     if (!body.trim()) return;
     try {
-      await api.insert("insights", [{ person_id: person.id, kind, category: category || null, body: body.trim(), private: isAdmin && priv }]);
+      const row = { person_id: person.id, kind, category: category || null, body: body.trim(), private: isAdmin && priv };
+      if (conVis && ver && !row.private) row.shared_with_person = true;
+      await api.insert("insights", [row]);
       toast(t("Nota guardada")); reload(); onClose();
     } catch (x) { toast(x.message, "bad"); }
   };
@@ -512,6 +583,8 @@ function AddNote({ person, onClose }) {
       </div>
       <label>${t("Qué pasó")}<textarea rows="4" value=${body} onInput=${(e) => setBody(e.target.value)} placeholder=${t("Ej.: aplicó el checklist toda la semana y bajaron sus errores.")}></textarea></label>
       ${isAdmin && html`<label class="check"><input type="checkbox" checked=${priv} onChange=${(e) => setPriv(e.target.checked)} /> ${t("Solo para mí (el lead no la ve)")}</label>`}
+      ${conVis && !priv && html`<label class="check"><input type="checkbox" checked=${ver} onChange=${(e) => setVer(e.target.checked)} /> ${t("Visible para {n} (la ve en su espacio)", { n: firstName(person.full_name) })}</label>
+        <p class="small muted vis-help">${ver ? t("{n} verá esta nota cuando entre a Team Coach.", { n: firstName(person.full_name) }) : t("Por defecto la nota es solo para líderes; {n} no la ve.", { n: firstName(person.full_name) })}</p>`}
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary">${t("Guardar nota")}</button></div>
     </form>
   <//>`;
@@ -521,10 +594,34 @@ function AddNote({ person, onClose }) {
 const canEditNote = (ctx, i) => ctx.isAdmin || i.author_id === ctx.session?.user?.id
   || (!i.private && i.person_id !== ctx.me?.person_id && !ctx.idx.isLead(i.person_id));
 
+// Cambio 20: ¿la persona ve esta nota en su espacio? (el líder decide; por defecto, no)
+function Visibilidad({ i }) {
+  const ctx = useApp();
+  const { api, reload, idx, me } = ctx;
+  if (i.private || i.person_id === me?.person_id || !("shared_with_person" in i)) return null;
+  const nombre = firstName(idx.person(i.person_id)?.full_name ?? t("la persona"));
+  const on = !!i.shared_with_person;
+  const puede = canEditNote(ctx, i);
+  const cambiar = async () => {
+    try {
+      const r = await api.update("insights", i.id, { shared_with_person: !on });
+      if (Array.isArray(r) && !r.length) throw new Error(t("No tienes permiso para editar esta nota."));
+      toast(on ? t("{n} ya no ve esta nota", { n: nombre }) : t("Ahora {n} ve esta nota en su espacio", { n: nombre })); reload();
+    } catch (x) { toast(x.message, "bad"); }
+  };
+  const label = on ? t("Visible para {n}", { n: nombre }) : t("Solo líderes");
+  const icon = on
+    ? html`<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" /><circle cx="12" cy="12" r="3" /></svg>`
+    : html`<svg viewBox="0 0 24 24" width="13" height="13" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></svg>`;
+  return puede
+    ? html`<button type="button" class=${"vis-tag" + (on ? " on" : "")} aria-pressed=${on} onClick=${cambiar} title=${on ? t("Clic para ocultarla a {n}", { n: nombre }) : t("Clic para que {n} la vea en su espacio", { n: nombre })}>${icon}${label}</button>`
+    : html`<span class=${"vis-tag" + (on ? " on" : "")}>${icon}${label}</span>`;
+}
+
 function NoteItem({ i, showCat = true }) {
   const ctx = useApp();
   const [edit, setEdit] = useState(false);
-  return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}
+  return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}<${Visibilidad} i=${i} />
     ${canEditNote(ctx, i) && html`<button class="icon note-edit" title=${t("Editar nota")} aria-label=${t("Editar nota")} onClick=${() => setEdit(true)}>✎</button>`}
     <p>${i.body}</p>
     ${i.edited_at && html`<p class="small muted note-edited">${t("Editada por {p}, {d}", { p: i.edited_by_name ?? "—", d: fmtDate(String(i.edited_at).slice(0, 10)) })}</p>`}
@@ -537,6 +634,7 @@ function EditNote({ note, onClose }) {
   const [kind, setKind] = useState(note.kind);
   const [category, setCategory] = useState(note.category ?? "");
   const [body, setBody] = useState(note.body);
+  const [ver, setVer] = useState(!!note.shared_with_person);
   const [busy, setBusy] = useState(false);
   const p = idx.person(note.person_id);
   const save = async (e) => {
@@ -544,7 +642,9 @@ function EditNote({ note, onClose }) {
     if (!body.trim()) return toast(t("La nota no puede quedar vacía."), "bad");
     setBusy(true);
     try {
-      const r = await api.update("insights", note.id, { kind, category: category.trim() || null, body: body.trim() });
+      const patch = { kind, category: category.trim() || null, body: body.trim() };
+      if ("shared_with_person" in note && !note.private) patch.shared_with_person = ver;
+      const r = await api.update("insights", note.id, patch);
       if (Array.isArray(r) && !r.length) throw new Error(t("No tienes permiso para editar esta nota."));
       toast(t("Nota actualizada")); reload(); onClose();
     } catch (x) { toast(x.message, "bad"); }
@@ -557,6 +657,7 @@ function EditNote({ note, onClose }) {
         <label class="grow">${t("Tema")}<input list="cats" value=${category} onInput=${(e) => setCategory(e.target.value)} /></label>
       </div>
       <label>${t("Qué pasó")}<textarea rows="5" value=${body} onInput=${(e) => setBody(e.target.value)}></textarea></label>
+      ${"shared_with_person" in note && !note.private && html`<label class="check"><input type="checkbox" checked=${ver} onChange=${(e) => setVer(e.target.checked)} /> ${t("Visible para {n} (la ve en su espacio)", { n: firstName(p?.full_name ?? "") })}</label>`}
       <p class="small muted">${t("Queda registrado quién la editó y cuándo; Gus puede ver el texto anterior.")}</p>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Guardar cambios")}</button></div>
     </form>
@@ -728,6 +829,76 @@ function IdeasModal({ person, onClose, history }) {
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${busy ? t("Pensando…") : t("Proponer ideas")}</button></div>
     </form>
   <//>`;
+}
+
+// ---------------------------------------------------------------------
+// Cambio 20: "Mi espacio" — lo que ve cada persona del equipo (solo lo suyo)
+// ---------------------------------------------------------------------
+function MiEspacio({ seccion }) {
+  const ctx = useApp();
+  const { data, idx, me } = ctx;
+  const p = idx.person(me?.person_id);
+  const [verHechos, setVerHechos] = useState(false);
+  useEffect(() => { ctx.markSeen?.("incidents"); }, []);
+  useEffect(() => {
+    const id = { incidencias: "mi-inc", pendientes: "mi-pend", reuniones: "mi-reu" }[seccion];
+    const el = id && document.getElementById(id);
+    if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
+  }, [seccion]);
+  if (!p) return html`<section class="page narrow"><h1>${t("Mi espacio")}</h1><${Empty}>${t("Tu usuario todavía no está vinculado a tu perfil. Avísale a Gus.")}<//></section>`;
+  const g = idx.group(p.group_id);
+  const mios = data.actions.filter((a) => a.owner_id === p.id);
+  const abiertos = mios.filter((a) => OPEN.includes(a.status)).sort((a, b) => (a.due_date ?? "9").localeCompare(b.due_date ?? "9"));
+  const hechos = mios.filter((a) => a.status === "hecho").sort((a, b) => (b.done_at ?? b.created_at ?? "").localeCompare(a.done_at ?? a.created_at ?? "")).slice(0, 10);
+  const notas = data.insights.filter((i) => i.person_id === p.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
+  const reus = data.my_meetings ?? [];
+  const mes = today().slice(0, 7);
+  const incMes = (data.incidents ?? []).filter((i) => !i.voided && esMia(ctx, i) && String(i.occurred_on).startsWith(mes)).length;
+  const tieneInc = (data.incidents ?? []).some((i) => esMia(ctx, i));
+  return html`<section class="page person mi" style=${`--c:${g?.color ?? "#64748b"}`}>
+    <header class="person-head">
+      <${Avatar} person=${p} group=${g} size="xl" />
+      <div class="grow">
+        <h1>${t("Hola, {n}", { n: firstName(p.nickname || p.full_name) })}</h1>
+        <p class="muted">${[p.title, g?.name].filter(Boolean).join(", ")}</p>
+        <p class="small muted">${t("Este es tu espacio: solo tú (y tu líder) ven esta información.")}</p>
+      </div>
+    </header>
+    <div class="pulse">
+      <a href="#/pendientes" class=${"pulse-item" + (abiertos.some(isOverdue) ? " alert" : "")}><strong>${abiertos.length}</strong> ${t("pendientes abiertos")}</a>
+      <a href="#/incidencias" class=${"pulse-item" + (incMes ? " alert" : "")}><strong>${incMes}</strong> ${t("incidencias este mes")}</a>
+      <a href="#/reuniones" class="pulse-item"><strong>${reus.length}</strong> ${reus.length === 1 ? t("reunión") : t("reuniones")}</a>
+    </div>
+
+    <${BambooPersonBlock} person=${p} enlace=${false} />
+
+    <section class="block" id="mi-pend">
+      <h2>${t("Mis pendientes")}</h2>
+      <p class="muted small">${t("Las tareas que tienes a cargo. Márcalas cuando las termines y deja un comentario si hace falta.")}</p>
+      <${ActionTable} actions=${abiertos} mine=${true} empty=${t("No tienes pendientes abiertos.")} />
+      ${hechos.length > 0 && html`<button class="link small mt-s" onClick=${() => setVerHechos(!verHechos)}>${verHechos ? t("Ocultar completadas") : t("Ver completadas ({n})", { n: hechos.length })}</button>
+        ${verHechos && html`<div class="mt-s"><${ActionTable} actions=${hechos} mine=${true} /></div>`}`}
+    </section>
+
+    <section class="block" id="mi-inc">
+      ${tieneInc ? html`<${IncidenciasPersona} person=${p} />` : html`<h2>${t("Incidencias")}</h2><${Empty}>${t("Sin incidencias.")}<//>`}
+    </section>
+
+    <section class="block" id="mi-reu">
+      <h2>${t("Mis reuniones")}</h2>
+      ${reus.length ? html`<ul class="mi-reus">${reus.map((m) => html`<li key=${m.id}>
+          <div class="row between"><strong>${t(MEETING_KIND[m.kind] ?? "Reunión")} · ${fmtDate(m.meeting_date)}</strong>
+            ${m.status !== "aplicado" && html`<span class="pill">${t("En revisión")}</span>`}</div>
+          ${m.summary ? html`<p class="small">${m.summary}</p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
+          ${(m.acuerdos ?? []).length > 0 && html`<div class="mi-acuerdos"><span class="lbl">${t("Acuerdos")}</span><ul>${m.acuerdos.map((a) => html`<li class=${a.status === "hecho" ? "done" : ""} key=${a.id}>${a.status === "hecho" ? "✓ " : ""}${a.body}${a.due_date ? html` <span class="muted small">· ${fmtDate(a.due_date)}</span>` : ""}</li>`)}</ul></div>`}
+        </li>`)}</ul>` : html`<${Empty}>${t("Todavía no hay reuniones registradas.")}<//>`}
+    </section>
+
+    <section class="block">
+      <h2>${t("Notas de tu líder")}</h2>
+      ${notas.length ? html`<ol class="timeline">${notas.map((i) => html`<li key=${i.id}><div class="tl-date">${fmtDate(String(i.created_at).slice(0, 10))}</div><${NoteItem} i=${i} /></li>`)}</ol>` : html`<${Empty}>${t("Tu líder todavía no compartió notas contigo.")}<//>`}
+    </section>
+  </section>`;
 }
 
 function PersonView({ id }) {
@@ -1477,30 +1648,91 @@ function IdeasView() {
 // ---------------------------------------------------------------------
 // Accesos (solo admin)
 // ---------------------------------------------------------------------
+const ROL = { admin: "Admin", lead: "Lead", member: "Persona" };
+
 function AccessView() {
   const { data, api, reload, idx } = useApp();
   const [modal, setModal] = useState(null);
-  const leads = data.people.filter((p) => idx.isLead(p.id) || p.email);
   const profileOf = (pid) => data.profiles.find((x) => x.person_id === pid);
+  const leads = data.people.filter((p) => isActive(p) || profileOf(p.id))
+    .sort((a, b) => (idx.isLead(b.id) - idx.isLead(a.id)) || a.full_name.localeCompare(b.full_name));
+  const sinAcceso = leads.filter((p) => !profileOf(p.id) && isActive(p));
   return html`<section class="page narrow">
-    <header class="page-head"><div><h1>${t("Accesos")}</h1><p class="muted">${t("Crea el usuario de cada colaborador. Cada uno ve solo su grupo, sus reuniones contigo y las ideas que validaste.")}</p></div>
-      <button onClick=${() => setModal({ edit: true })}>${t("Agregar persona")}</button></header>
+    <header class="page-head"><div><h1>${t("Accesos")}</h1><p class="muted">${t("Crea el usuario de cada persona. Los líderes ven a su gente; las personas del equipo ven solo lo suyo (Mi espacio).")}</p></div>
+      <div class="row">${sinAcceso.length > 0 && html`<button class="primary" onClick=${() => setModal({ bulk: true })}>${t("Crear accesos del equipo ({n})", { n: sinAcceso.length })}</button>`}
+      <button onClick=${() => setModal({ edit: true })}>${t("Agregar persona")}</button></div></header>
     <table class="tbl access">
       <thead><tr><th>${t("Persona")}</th><th>${t("Usuario")}</th><th></th></tr></thead>
       <tbody>${leads.map((p) => {
         const pr = profileOf(p.id);
-        return html`<tr key=${p.id}><td><${PersonLink} id=${p.id} /><div class="small muted">${idx.group(p.group_id)?.name ?? ""}</div></td>
+        return html`<tr key=${p.id}><td><${PersonLink} id=${p.id} /><div class="small muted">${[idx.group(p.group_id)?.name, idx.isLead(p.id) ? t("Lead") : null].filter(Boolean).join(" · ")}</div></td>
           <td>${pr ? html`<span>${pr.email}</span>` : html`<span class="muted">${p.email ?? t("sin correo")}</span>`}</td>
           <td class="right">${pr ? html`<button onClick=${() => setModal({ reset: pr, person: p })}>${t("Nueva contraseña")}</button>` : html`<button class="primary" onClick=${() => setModal({ create: p })}>${t("Crear acceso")}</button>`}</td></tr>`;
       })}</tbody>
     </table>
     <h2 class="mt">${t("Todos los usuarios")}</h2>
-    <table class="tbl"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id}><td>${pr.email}</td><td>${pr.role === "admin" ? "Admin" : t("Lead")}</td>
+    <table class="tbl"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id}><td>${pr.email}</td>
+      <td>${pr.role === "admin" ? "Admin" : html`<select class="mini" value=${pr.role} aria-label=${t("Rol")} onChange=${async (e) => { try { await api.update("profiles", pr.id, { role: e.target.value }); toast(t("Rol actualizado")); reload(); } catch (x) { toast(x.message, "bad"); } }}>
+        <option value="lead">${t("Lead")}</option><option value="member">${t("Persona")}</option></select>`}</td>
       <td>${pr.role !== "admin" && html`<${PersonSelect} value=${pr.person_id} onChange=${async (v) => { await api.update("profiles", pr.id, { person_id: v }); reload(); }} allowEmpty=${t("Sin vincular")} />`}</td></tr>`)}</tbody></table>
     ${modal?.create && html`<${CredModal} person=${modal.create} onClose=${() => setModal(null)} />`}
     ${modal?.reset && html`<${CredModal} person=${modal.person} profile=${modal.reset} onClose=${() => setModal(null)} />`}
     ${modal?.edit && html`<${EditPerson} person=${{}} onClose=${() => setModal(null)} />`}
+    ${modal?.bulk && html`<${BulkAccess} people=${sinAcceso} onClose=${() => setModal(null)} />`}
   </section>`;
+}
+
+// Cambio 20: crear los accesos de todo el equipo de una vez
+function BulkAccess({ people, onClose }) {
+  const { api, reload, bamboo, idx } = useApp();
+  const correoBamboo = (p) => (bamboo?.employees ?? []).find((e) => e.bamboo_id && e.bamboo_id === p.bamboo_id)?.email ?? "";
+  const [filas, setFilas] = useState(() => people.map((p) => { const email = (p.email || correoBamboo(p) || "").trim(); return { p, email, on: !!email, pw: genPassword() }; }));
+  const [res, setRes] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const set = (i, patch) => setFilas(filas.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  const elegidas = filas.filter((f) => f.on && f.email.includes("@"));
+  const crear = async () => {
+    setBusy(true);
+    const out = [];
+    try {
+      for (let i = 0; i < elegidas.length; i += 10) {
+        const lote = elegidas.slice(i, i + 10);
+        const r = await api.fn("create_users", { users: lote.map((f) => ({ person_id: f.p.id, email: f.email.trim(), password: f.pw })) });
+        for (const x of r.results ?? []) out.push({ ...x, f: lote.find((f) => f.p.id === x.person_id) });
+      }
+    } catch (x) { toast(x.message, "bad"); }
+    setRes(out); setBusy(false); reload();
+  };
+  const url = location.origin + location.pathname;
+  const msg = (x) => t("Hola {n}, ya tienes acceso a Team Coach, tu espacio personal (horas, pendientes, reuniones e incidencias).\nEnlace: {u}\nUsuario: {e}\nContraseña inicial: {p}\nAl entrar te pedirá crear tu propia contraseña.", { n: firstName(x.f.p.full_name), u: url, e: x.email, p: x.f.pw });
+  if (res) {
+    const okList = res.filter((x) => x.ok || x.created);
+    return html`<${Modal} title=${t("Accesos creados")} onClose=${onClose} wide=${true}>
+      <div class="stack">
+        <p>${t("Se crearon {n} de {m}. Envíale a cada uno su mensaje (por Teams o en persona). Las contraseñas no se vuelven a mostrar.", { n: okList.length, m: res.length })}</p>
+        <table class="tbl bulk-res"><thead><tr><th>${t("Persona")}</th><th>${t("Usuario")}</th><th>${t("Contraseña")}</th><th></th></tr></thead>
+          <tbody>${res.map((x) => html`<tr key=${x.person_id}><td>${x.f?.p.full_name ?? "—"}${x.role && html` <span class="pill">${t(ROL[x.role] ?? x.role)}</span>`}</td><td class="small">${x.email}</td>
+            <td>${x.ok ? html`<code>${x.f?.pw}</code>` : html`<span class="small late-t">${x.error}</span>`}</td>
+            <td class="right">${x.ok && html`<button class="link small" onClick=${() => { navigator.clipboard?.writeText(msg(x)); toast(t("Copiado")); }}>${t("Copiar mensaje")}</button>`}</td></tr>`)}</tbody></table>
+        <div class="row end">
+          ${okList.some((x) => x.ok) && html`<button onClick=${() => { navigator.clipboard?.writeText(res.filter((x) => x.ok).map(msg).join("\n\n———\n\n")); toast(t("Copiado")); }}>${t("Copiar todos los mensajes")}</button>`}
+          <button class="primary" onClick=${onClose}>${t("Cerrar")}</button></div>
+      </div>
+    <//>`;
+  }
+  return html`<${Modal} title=${t("Crear accesos del equipo")} onClose=${onClose} wide=${true}>
+    <div class="stack">
+      <p class="muted small">${t("Cada persona entra con su correo y una contraseña inicial que deberá cambiar al entrar. Los líderes quedan como Lead; el resto como Persona (solo ve lo suyo).")}</p>
+      <table class="tbl bulk-tbl"><thead><tr><th></th><th>${t("Persona")}</th><th>${t("Correo")}</th></tr></thead>
+        <tbody>${filas.map((f, i) => html`<tr key=${f.p.id} class=${f.on ? "" : "off"}>
+          <td><input type="checkbox" checked=${f.on} onChange=${(e) => set(i, { on: e.target.checked })} aria-label=${t("Crear acceso para {n}", { n: f.p.full_name })} /></td>
+          <td>${f.p.full_name}<div class="small muted">${[idx.group(f.p.group_id)?.name, idx.isLead(f.p.id) ? t("Lead") : t("Persona")].filter(Boolean).join(" · ")}</div></td>
+          <td><input type="email" class="mini grow" value=${f.email} placeholder=${t("correo@empresa.com")} onInput=${(e) => set(i, { email: e.target.value, on: e.target.value.includes("@") || f.on })} /></td></tr>`)}</tbody></table>
+      <div class="row end"><span class="small muted grow">${t("{n} seleccionadas", { n: elegidas.length })}</span>
+        <button type="button" onClick=${onClose}>${t("Cancelar")}</button>
+        <button class="primary" disabled=${busy || !elegidas.length} onClick=${crear}>${busy ? t("Creando…") : t("Crear {n} accesos", { n: elegidas.length })}</button></div>
+    </div>
+  <//>`;
 }
 
 function CredModal({ person, profile, onClose }) {
@@ -1548,19 +1780,22 @@ export function campana(ctx) {
   // 1) Incidencias nuevas
   const incs = nuevas(ctx);
   if (incs.length) grupos.push({ k: "inc", href: "#/incidencias", titulo: t("Incidencias nuevas"),
-    items: incs.map((i) => ({ id: "i" + i.id, txt: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + t(i.category), when: new Date(i.created_at).getTime() })) });
+    items: incs.map((i) => ({ id: "i" + i.id, meta: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on),
+      txt: t(i.category) + (i.note || i.detail ? " — " + (i.note || i.detail) : ""), when: new Date(i.created_at).getTime() })) });
   // 2) Mis pendientes vencidos o que vencen en 2 días
   const mio = (a) => (me?.person_id ? a.owner_id === me.person_id : false) || (isAdmin && !a.owner_id);
   const pend = data.actions.filter((a) => OPEN.includes(a.status) && a.due_date && mio(a) && daysUntil(a.due_date) <= 2)
     .sort((a, b) => a.due_date.localeCompare(b.due_date));
   if (pend.length) grupos.push({ k: "pend", href: "#/pendientes", titulo: t("Mis pendientes"),
     items: pend.map((a) => { const d = daysUntil(a.due_date);
-      return { id: "a" + a.id + (d < 0 ? "v" : "p"), late: d < 0, txt: (d < 0 ? t("Vencido") : d === 0 ? t("Vence hoy") : d === 1 ? t("Vence mañana") : t("Vence en {n} días", { n: d })) + " · " + a.body,
+      return { id: "a" + a.id + (d < 0 ? "v" : "p"), late: d < 0, txt: a.body,
+        meta: (d < 0 ? t("Vencido") + " · " + fmtDate(a.due_date) : d === 0 ? t("Vence hoy") : d === 1 ? t("Vence mañana") : t("Vence en {n} días", { n: d })) + (a.person_id && a.person_id !== me?.person_id && idx.person(a.person_id) ? " · " + idx.person(a.person_id).full_name : ""),
         when: d < 0 ? tsDia(a.due_date) + MS_DIA : tsDia(a.due_date) - 2 * MS_DIA }; }) });
   // 3) Reuniones por revisar
   const reus = data.meetings.filter((m) => !m.shared && m.created_by === yo && (m.status === "borrador" || m.status === "analizado"));
   const rev = reus.map((m) => ({ id: "m" + m.id + m.status, href: m.status === "analizado" ? "#/revisar/" + m.id : "#/reunion/" + m.id,
-    txt: (idx.person(m.person_id)?.full_name ?? t("Reunión")) + " · " + (m.status === "analizado" ? t("Revisar y aplicar") : t("Sin analizar")), when: new Date(m.created_at).getTime() }));
+    meta: (m.status === "analizado" ? t("Revisar y aplicar") : t("Sin analizar")) + " · " + fmtDate(m.meeting_date),
+    txt: idx.person(m.person_id)?.full_name ?? t("Reunión"), when: new Date(m.created_at).getTime() }));
   if (isAdmin) {
     for (const x of data.suggestions.filter((x) => x.status === "propuesta")) rev.push({ id: "s" + x.id, href: "#/validar", txt: t("Sugerencia por validar"), when: new Date(x.created_at ?? 0).getTime() });
     for (const r of data.reviews.filter((r) => r.status === "pendiente")) rev.push({ id: "r" + r.id, href: "#/validar", txt: t("Revisión pendiente"), when: new Date(r.created_at ?? 0).getTime() });
@@ -1612,7 +1847,7 @@ function Campana() {
       ${c.grupos.length === 0 ? html`<p class="muted small bell-empty">${t("Todo al día. No hay nada pendiente tuyo.")}</p>`
         : c.grupos.map((g) => html`<div class="bell-g" key=${g.k}>
           <a class="bell-gt" href=${g.href}><span>${g.titulo}</span><span class="pill">${g.items.length}</span></a>
-          <ul>${g.items.slice(0, 4).map((i) => html`<li key=${i.id} class=${(i.when > desde ? "is-new" : "") + (i.late ? " late" : "")}><a href=${i.href ?? g.href}>${i.txt}</a></li>`)}</ul>
+          <ul>${g.items.slice(0, 4).map((i) => html`<li key=${i.id} class=${(i.when > desde ? "is-new" : "") + (i.late ? " late" : "")}><a href=${i.href ?? g.href}>${i.meta && html`<span class="bi-meta">${i.meta}</span>`}<span class="bi-txt">${i.txt}</span></a></li>`)}</ul>
           ${g.items.length > 4 && html`<a class="small bell-more" href=${g.href}>${t("Ver las {n}", { n: g.items.length })}</a>`}
         </div>`)}
     </div>`}
@@ -1625,6 +1860,7 @@ function Shell({ api, session, onLang }) {
   const [pwModal, setPwModal] = useState(false);
   const [menu, setMenu] = useState(false);
   const [seen, setSeen] = useState(null);   // "visto" local (Cambio 19), se sincroniza con user_seen
+  const [hecha, setHecha] = useState(null); // Cambio 20: tarea recién completada → ofrecer comentario
   const route = useRoute();
 
   const reload = useCallback(async () => {
@@ -1659,6 +1895,7 @@ function Shell({ api, session, onLang }) {
 
   const profile = me ?? { role: "lead" };
   const isAdmin = profile.role === "admin";
+  const isMember = profile.role === "member";   // Cambio 20: persona del equipo → solo "Mi espacio"
   const reviewsPending = data.reviews.filter((r) => r.status === "pendiente").length;
   const toReview = data.suggestions.filter((s) => s.status === "propuesta").length + reviewsPending;
   const lateCount = data.actions.filter(isOverdue).length;
@@ -1668,12 +1905,13 @@ function Shell({ api, session, onLang }) {
     setSeen([...seenRows.filter((x) => x.kind !== kind), { kind, seen_at: new Date().toISOString() }]);
     api.markSeen(kind).catch(() => {});
   };
-  const ctx = { api, data, reload, idx, me: profile, isAdmin, session, reviewsPending, bamboo, reloadBamboo, seen: seenRows, markSeen };
+  const ctx = { api, data, reload, idx, me: profile, isAdmin, isMember, session, reviewsPending, bamboo, reloadBamboo, seen: seenRows, markSeen, alCompletar: setHecha };
   const incNuevas = data.incidents_error ? 0 : nuevas(ctx).length;
   const setLang = async (l) => { onLang(l); try { await api.rpc("set_lang", { l }); } catch (_) {} };
 
   let page;
-  switch (route.page) {
+  if (isMember) page = html`<${MiEspacio} seccion=${route.page} />`;
+  else switch (route.page) {
     case "persona": page = html`<${PersonView} id=${route.id} key=${route.id} />`; break;
     case "reuniones": page = html`<${MeetingsView} />`; break;
     case "reunion": page = html`<${MeetingView} id=${route.id} key=${route.id} />`; break;
@@ -1689,7 +1927,7 @@ function Shell({ api, session, onLang }) {
     case "reglas": page = html`<${ReglasView} />`; break;
     default: page = html`<${TeamView} />`;
   }
-  const nav = [
+  const nav = isMember ? [["mi", t("Mi espacio"), incNuevas || null]] : [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
     ["incidencias", t("Incidencias"), incNuevas || null],
@@ -1698,7 +1936,7 @@ function Shell({ api, session, onLang }) {
     ["ideas", t("Banco de ideas"), null],
     ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : [["reglas", t("Feriados"), null]]),
   ];
-  const active = { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
+  const active = isMember ? "mi" : { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
 
   return html`<${Ctx.Provider} value=${ctx}>
     <div class="shell">
@@ -1707,7 +1945,7 @@ function Shell({ api, session, onLang }) {
           <${Campana} />
           <button class="icon burger" aria-label=${t("Menú")} onClick=${() => setMenu(!menu)}>☰</button></div>
         <nav>
-          <a class=${"nav-new" + (active === "nueva" ? " on" : "")} href="#/nueva">${t("Nueva reunión")}</a>
+          ${!isMember && html`<a class=${"nav-new" + (active === "nueva" ? " on" : "")} href="#/nueva">${t("Nueva reunión")}</a>`}
           ${nav.map(([k, label, badge]) => html`<a class=${active === k ? "on" : ""} href=${"#/" + k}>${label}${badge && html`<span class="badge">${badge}</span>`}</a>`)}
         </nav>
         <div class="me">
@@ -1722,6 +1960,8 @@ function Shell({ api, session, onLang }) {
       <main class="main">${page ?? html`<section class="page"><${Empty}>${t("No tienes acceso a esta sección.")}<//></section>`}</main>
     </div>
     ${pwModal && html`<${ChangePassword} onClose=${() => setPwModal(false)} />`}
+    ${hecha && html`<${AlCompletar} a=${hecha} onClose=${() => setHecha(null)} />`}
+    ${profile.must_change_password && isMember && !api.demo && html`<${ChangePassword} forced=${true} onClose=${() => {}} />`}
     <datalist id="cats">${CATS.map((c) => html`<option value=${c} />`)}</datalist>
   <//>`;
 }

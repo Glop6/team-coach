@@ -50,6 +50,9 @@ export function createApi() {
         out.incidents = ie ? [] : inc ?? []; out.incidents_error = ie ? ie.message : null; }
       // Campanita (Cambio 19): hasta cuándo revisé cada sección. Sin la tabla, todo sigue igual.
       { const { data: us, error: ue } = await sb.from("user_seen").select("*"); out.user_seen = ue ? [] : us ?? []; out.user_seen_error = ue ? ue.message : null; }
+      // Cambio 20: comentarios en pendientes y "mis reuniones" (solo personas del equipo). Sin el SQL, todo sigue igual.
+      { const { data: ac, error: ae } = await sb.from("action_comments").select("*").order("created_at").limit(5000); out.action_comments = ae ? [] : ac ?? []; out.action_comments_error = ae ? ae.message : null; }
+      { const { data: mm, error: me } = await sb.rpc("my_meetings"); out.my_meetings = me ? [] : mm ?? []; }
       // Quiénes son líderes (aunque no sean de mis grupos)
       try { const { data: lids } = await sb.rpc("lead_ids"); out.lead_ids = (lids ?? []).map((x) => (typeof x === "string" ? x : x.lead_ids ?? Object.values(x)[0])); } catch (_) { out.lead_ids = []; }
       // Reuniones que Gus compartió con un lead: solo resumen y temas

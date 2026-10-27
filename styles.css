@@ -691,3 +691,39 @@ button.link + button.link { margin-left: 0.8rem; }
 .inc-hist li { margin: 0.1rem 0; }
 .inc-mias { border-top: 1px solid var(--line); padding-top: 1rem; }
 .brand { white-space: nowrap; gap: 0.5rem; }
+
+/* ===== Cambio 20: Mi espacio, notas visibles y comentarios ===== */
+.vis-tag { display: inline-flex; align-items: center; gap: 0.3rem; font-size: 0.72rem; font-weight: 650; border-radius: 999px; padding: 0.08rem 0.55rem; margin-left: 0.35rem;
+  border: 1px dashed var(--line); background: transparent; color: var(--muted); vertical-align: middle; line-height: 1.5; }
+.vis-tag.on { border: 1px solid color-mix(in srgb, var(--primary) 45%, transparent); background: color-mix(in srgb, var(--primary) 12%, transparent); color: var(--primary); }
+button.vis-tag { cursor: pointer; }
+button.vis-tag:hover { border-color: var(--primary); color: var(--primary); }
+.vis-help { margin-top: -0.4rem; }
+.com-btn { display: inline-flex; align-items: center; gap: 0.25rem; color: var(--muted); vertical-align: middle; margin-left: 0.2rem; }
+.com-btn.has, .com-btn[aria-expanded="true"] { color: var(--primary); }
+.com-box { margin-top: 0.45rem; padding: 0.55rem 0.7rem; background: var(--surface-2); border-radius: var(--radius-sm); }
+.com-list { list-style: none; margin: 0 0 0.45rem; padding: 0; display: grid; gap: 0.45rem; }
+.com-list p { margin: 0.1rem 0 0; font-size: 0.88rem; }
+.com-del { font-size: 0.75rem; padding: 0 0.3rem; }
+.com-form input { min-width: 0; }
+.at-com { grid-column: 1 / -1; padding: 0 0 0.4rem; }
+.mi-reus { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.7rem; }
+.mi-reus > li { border: 1px solid var(--line); border-radius: var(--radius); padding: 0.75rem 0.9rem; background: var(--surface); }
+.mi-reus p { margin: 0.35rem 0 0; }
+.mi-acuerdos { margin-top: 0.5rem; }
+.mi-acuerdos ul { margin: 0.2rem 0 0; padding-left: 1.1rem; font-size: 0.9rem; }
+.mi-acuerdos li.done { color: var(--muted); }
+.mi .block { margin-top: 1.4rem; }
+.bulk-tbl tr.off td { opacity: 0.55; }
+.bulk-tbl input[type=email] { width: 100%; }
+.bulk-res code { font-size: 0.85rem; background: var(--surface-2); padding: 0.1rem 0.35rem; border-radius: 4px; }
+/* Campanita: avisos completos (sin cortar) */
+.bell-pop { width: 380px; }
+.bell-g li a { white-space: normal; overflow: visible; text-overflow: clip; display: flex; flex-direction: column; gap: 0.05rem; padding: 0.3rem 0 0.3rem 0.7rem; line-height: 1.35; }
+.bell-g li + li { margin-top: 0.15rem; }
+.bi-meta { font-size: 0.74rem; color: var(--muted); font-weight: 500; }
+.bell-g li.late .bi-meta { color: var(--late); font-weight: 650; }
+.bi-txt { color: var(--ink); overflow-wrap: anywhere; }
+.bell-g li:not(.is-new) .bi-txt { color: color-mix(in srgb, var(--ink) 78%, var(--muted)); }
+.at-mine .at-row { grid-template-columns: minmax(200px, 3fr) 126px 88px 120px; }
+@media (max-width: 860px) { .at-mine .at-row { grid-template-columns: 1fr 1fr; } }
