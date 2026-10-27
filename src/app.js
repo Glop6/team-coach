@@ -3,8 +3,9 @@ import { useState, useEffect, useContext, useMemo, useCallback } from "preact/ho
 import htm from "htm";
 import { EN } from "./i18n.js";
 import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
-import { HorasView, ReglasView, BambooPersonBlock } from "./bamboo.js";
+import { HorasView, ReglasView, BambooPersonBlock, MisHoras, MiDesarrollo } from "./bamboo.js";
 import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe } from "./incidencias.js";
+import { MiEspacio, MisIncidencias, MisReuniones, MisPendientes, MisNotas } from "./persona.js";
 
 const html = htm.bind(h);
 const Ctx = createContext(null);
@@ -40,13 +41,13 @@ export const fmtDate = (d) => {
   const yr = y !== today().slice(0, 4) ? ` ${y}` : "";
   return LANG === "en" ? `${mon} ${Number(day)}${yr}` : `${Number(day)} ${mon}${yr}`;
 };
-const daysUntil = (d) => Math.round((new Date(d + "T12:00:00") - new Date(today() + "T12:00:00")) / 86400000);
-const OPEN = ["pendiente", "en curso", "pausado"];
+export const daysUntil = (d) => Math.round((new Date(d + "T12:00:00") - new Date(today() + "T12:00:00")) / 86400000);
+export const OPEN = ["pendiente", "en curso", "pausado"];
 const STATUSES = ["pendiente", "en curso", "pausado", "hecho", "cancelado"];
 const PRIORITIES = ["alta", "media", "baja"];
 const KIND_LABEL = { fortaleza: "Fortaleza", "a mejorar": "A mejorar", observación: "Observación", avance: "Avance", retroceso: "Retroceso" };
 const KIND_ORDER = ["a mejorar", "fortaleza", "observación", "avance", "retroceso"];
-const MEETING_KIND = { "1-1": "1:1", mensual: "Mensual", grupal: "Grupal", otro: "Otra" };
+export const MEETING_KIND = { "1-1": "1:1", mensual: "Mensual", grupal: "Grupal", otro: "Otra" };
 const CATS = ["comunicación", "asertividad", "cómo preguntar", "proactividad", "autonomía", "actitud", "técnico", "calidad", "procesos", "organización", "inglés", "liderazgo", "comunicación con cliente", "crecimiento"];
 const go = (path) => (location.hash = path);
 // Cambio 10: ordenar notas sin IA y dejarlas listas para revisar
@@ -55,7 +56,7 @@ async function organizeMeeting(api, data, idx, m) {
   if (m.analysis?.coaching?.length) analysis.coaching = m.analysis.coaching;
   await api.update("meetings", m.id, { analysis, summary: analysis.summary, status: "analizado" });
 }
-const isOverdue = (a) => a.due_date && OPEN.includes(a.status) && daysUntil(a.due_date) < 0;
+export const isOverdue = (a) => a.due_date && OPEN.includes(a.status) && daysUntil(a.due_date) < 0;
 // Semáforo (Cambio 5): rojo = vencido o prioridad alta; amarillo = media; verde = baja
 const light = (a) => (isOverdue(a) || a.priority === "alta" ? "r" : a.priority === "baja" ? "g" : "y");
 const words = ["Condor", "Illimani", "Titicaca", "Puma", "Salar", "Yungas", "Tunari", "Sajama", "Uyuni", "Chaco", "Vicuna", "Huayna", "Chacaltaya", "Amboro", "Madidi"];
@@ -111,7 +112,7 @@ const isActive = (p) => p.status === "activo" || p.status === "pausado";
 // ---------------------------------------------------------------------
 // Piezas pequeñas
 // ---------------------------------------------------------------------
-function Avatar({ person, group, size = "md" }) {
+export function Avatar({ person, group, size = "md" }) {
   const color = group?.color ?? "#64748b";
   return html`<span class=${"avatar " + size} style=${`--c:${color}`} aria-hidden="true">${initials(person?.full_name)}</span>`;
 }
@@ -124,11 +125,11 @@ export function PersonLink({ id }) {
 }
 
 const slug = (s) => s.replace(/\s/g, "-").normalize("NFD").replace(/[̀-ͯ]/g, "");
-function Kind({ kind }) {
+export function Kind({ kind }) {
   return html`<span class=${"kind k-" + slug(kind)}>${t(KIND_LABEL[kind] ?? kind)}</span>`;
 }
 
-function Due({ date, status }) {
+export function Due({ date, status }) {
   if (!date) return html`<span class="muted small">—</span>`;
   const d = daysUntil(date);
   const done = !OPEN.includes(status ?? "pendiente");
@@ -137,7 +138,7 @@ function Due({ date, status }) {
   return html`<span class=${cls}>${txt}</span>`;
 }
 
-function PriorityPill({ a }) {
+export function PriorityPill({ a }) {
   return html`<span class=${"prio pr-" + light(a)}>${t(a.priority ?? "media")}</span>`;
 }
 
@@ -466,7 +467,7 @@ function ActionRow({ a }) {
   </li>`;
 }
 
-function ActionTable({ actions, empty, mine = false }) {
+export function ActionTable({ actions, empty, mine = false }) {
   const { idx } = useApp();
   const [com, setCom] = useState(null);
   const ops = useActionOps();
@@ -618,7 +619,7 @@ function Visibilidad({ i }) {
     : html`<span class=${"vis-tag" + (on ? " on" : "")}>${icon}${label}</span>`;
 }
 
-function NoteItem({ i, showCat = true }) {
+export function NoteItem({ i, showCat = true }) {
   const ctx = useApp();
   const [edit, setEdit] = useState(false);
   return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}<${Visibilidad} i=${i} />
@@ -829,76 +830,6 @@ function IdeasModal({ person, onClose, history }) {
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${busy ? t("Pensando…") : t("Proponer ideas")}</button></div>
     </form>
   <//>`;
-}
-
-// ---------------------------------------------------------------------
-// Cambio 20: "Mi espacio" — lo que ve cada persona del equipo (solo lo suyo)
-// ---------------------------------------------------------------------
-function MiEspacio({ seccion }) {
-  const ctx = useApp();
-  const { data, idx, me } = ctx;
-  const p = idx.person(me?.person_id);
-  const [verHechos, setVerHechos] = useState(false);
-  useEffect(() => { ctx.markSeen?.("incidents"); }, []);
-  useEffect(() => {
-    const id = { incidencias: "mi-inc", pendientes: "mi-pend", reuniones: "mi-reu" }[seccion];
-    const el = id && document.getElementById(id);
-    if (el) setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "start" }), 60);
-  }, [seccion]);
-  if (!p) return html`<section class="page narrow"><h1>${t("Mi espacio")}</h1><${Empty}>${t("Tu usuario todavía no está vinculado a tu perfil. Avísale a Gus.")}<//></section>`;
-  const g = idx.group(p.group_id);
-  const mios = data.actions.filter((a) => a.owner_id === p.id);
-  const abiertos = mios.filter((a) => OPEN.includes(a.status)).sort((a, b) => (a.due_date ?? "9").localeCompare(b.due_date ?? "9"));
-  const hechos = mios.filter((a) => a.status === "hecho").sort((a, b) => (b.done_at ?? b.created_at ?? "").localeCompare(a.done_at ?? a.created_at ?? "")).slice(0, 10);
-  const notas = data.insights.filter((i) => i.person_id === p.id).sort((a, b) => b.created_at.localeCompare(a.created_at));
-  const reus = data.my_meetings ?? [];
-  const mes = today().slice(0, 7);
-  const incMes = (data.incidents ?? []).filter((i) => !i.voided && esMia(ctx, i) && String(i.occurred_on).startsWith(mes)).length;
-  const tieneInc = (data.incidents ?? []).some((i) => esMia(ctx, i));
-  return html`<section class="page person mi" style=${`--c:${g?.color ?? "#64748b"}`}>
-    <header class="person-head">
-      <${Avatar} person=${p} group=${g} size="xl" />
-      <div class="grow">
-        <h1>${t("Hola, {n}", { n: firstName(p.nickname || p.full_name) })}</h1>
-        <p class="muted">${[p.title, g?.name].filter(Boolean).join(", ")}</p>
-        <p class="small muted">${t("Este es tu espacio: solo tú (y tu líder) ven esta información.")}</p>
-      </div>
-    </header>
-    <div class="pulse">
-      <a href="#/pendientes" class=${"pulse-item" + (abiertos.some(isOverdue) ? " alert" : "")}><strong>${abiertos.length}</strong> ${t("pendientes abiertos")}</a>
-      <a href="#/incidencias" class=${"pulse-item" + (incMes ? " alert" : "")}><strong>${incMes}</strong> ${t("incidencias este mes")}</a>
-      <a href="#/reuniones" class="pulse-item"><strong>${reus.length}</strong> ${reus.length === 1 ? t("reunión") : t("reuniones")}</a>
-    </div>
-
-    <${BambooPersonBlock} person=${p} enlace=${false} />
-
-    <section class="block" id="mi-pend">
-      <h2>${t("Mis pendientes")}</h2>
-      <p class="muted small">${t("Las tareas que tienes a cargo. Márcalas cuando las termines y deja un comentario si hace falta.")}</p>
-      <${ActionTable} actions=${abiertos} mine=${true} empty=${t("No tienes pendientes abiertos.")} />
-      ${hechos.length > 0 && html`<button class="link small mt-s" onClick=${() => setVerHechos(!verHechos)}>${verHechos ? t("Ocultar completadas") : t("Ver completadas ({n})", { n: hechos.length })}</button>
-        ${verHechos && html`<div class="mt-s"><${ActionTable} actions=${hechos} mine=${true} /></div>`}`}
-    </section>
-
-    <section class="block" id="mi-inc">
-      ${tieneInc ? html`<${IncidenciasPersona} person=${p} />` : html`<h2>${t("Incidencias")}</h2><${Empty}>${t("Sin incidencias.")}<//>`}
-    </section>
-
-    <section class="block" id="mi-reu">
-      <h2>${t("Mis reuniones")}</h2>
-      ${reus.length ? html`<ul class="mi-reus">${reus.map((m) => html`<li key=${m.id}>
-          <div class="row between"><strong>${t(MEETING_KIND[m.kind] ?? "Reunión")} · ${fmtDate(m.meeting_date)}</strong>
-            ${m.status !== "aplicado" && html`<span class="pill">${t("En revisión")}</span>`}</div>
-          ${m.summary ? html`<p class="small">${m.summary}</p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
-          ${(m.acuerdos ?? []).length > 0 && html`<div class="mi-acuerdos"><span class="lbl">${t("Acuerdos")}</span><ul>${m.acuerdos.map((a) => html`<li class=${a.status === "hecho" ? "done" : ""} key=${a.id}>${a.status === "hecho" ? "✓ " : ""}${a.body}${a.due_date ? html` <span class="muted small">· ${fmtDate(a.due_date)}</span>` : ""}</li>`)}</ul></div>`}
-        </li>`)}</ul>` : html`<${Empty}>${t("Todavía no hay reuniones registradas.")}<//>`}
-    </section>
-
-    <section class="block">
-      <h2>${t("Notas de tu líder")}</h2>
-      ${notas.length ? html`<ol class="timeline">${notas.map((i) => html`<li key=${i.id}><div class="tl-date">${fmtDate(String(i.created_at).slice(0, 10))}</div><${NoteItem} i=${i} /></li>`)}</ol>` : html`<${Empty}>${t("Tu líder todavía no compartió notas contigo.")}<//>`}
-    </section>
-  </section>`;
 }
 
 function PersonView({ id }) {
@@ -1872,7 +1803,7 @@ function Shell({ api, session, onLang }) {
   const meRole = data?.profiles.find((p) => p.id === session.user.id)?.role;
   const reloadBamboo = useCallback(async () => {
     if (!api.loadBamboo) return setBamboo({ available: false, error: "demo" });
-    setBamboo(await api.loadBamboo({ admin: meRole === "admin" }));
+    setBamboo(await api.loadBamboo({ admin: meRole === "admin", member: meRole === "member" }));
   }, [meRole]);
   useEffect(() => { if (data) reloadBamboo(); }, [!!data, meRole]);
   useEffect(() => setMenu(false), [route.page, route.id]);
@@ -1910,8 +1841,11 @@ function Shell({ api, session, onLang }) {
   const setLang = async (l) => { onLang(l); try { await api.rpc("set_lang", { l }); } catch (_) {} };
 
   let page;
-  if (isMember) page = html`<${MiEspacio} seccion=${route.page} />`;
-  else switch (route.page) {
+  if (isMember) {
+    // Cambio 20b: la persona del equipo navega solo por lo suyo
+    page = { horas: html`<${MisHoras} />`, incidencias: html`<${MisIncidencias} />`, reuniones: html`<${MisReuniones} />`,
+      pendientes: html`<${MisPendientes} />`, desarrollo: html`<${MiDesarrollo} />`, notas: html`<${MisNotas} />` }[route.page] ?? html`<${MiEspacio} />`;
+  } else switch (route.page) {
     case "persona": page = html`<${PersonView} id=${route.id} key=${route.id} />`; break;
     case "reuniones": page = html`<${MeetingsView} />`; break;
     case "reunion": page = html`<${MeetingView} id=${route.id} key=${route.id} />`; break;
@@ -1927,7 +1861,8 @@ function Shell({ api, session, onLang }) {
     case "reglas": page = html`<${ReglasView} />`; break;
     default: page = html`<${TeamView} />`;
   }
-  const nav = isMember ? [["mi", t("Mi espacio"), incNuevas || null]] : [
+  const nav = isMember ? [["mi", t("Mi espacio"), null], ["horas", t("Mis horas"), null], ["incidencias", t("Mis incidencias"), incNuevas || null],
+    ["reuniones", t("Mis reuniones"), null], ["pendientes", t("Mis pendientes"), lateCount || null], ["desarrollo", t("Mi desarrollo"), null], ["notas", t("Notas de mi líder"), null]] : [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
     ["incidencias", t("Incidencias"), incNuevas || null],
@@ -1936,7 +1871,7 @@ function Shell({ api, session, onLang }) {
     ["ideas", t("Banco de ideas"), null],
     ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : [["reglas", t("Feriados"), null]]),
   ];
-  const active = isMember ? "mi" : { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
+  const active = isMember ? (["horas", "incidencias", "reuniones", "pendientes", "desarrollo", "notas"].includes(route.page) ? route.page : "mi") : { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
 
   return html`<${Ctx.Provider} value=${ctx}>
     <div class="shell">

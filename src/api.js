@@ -64,7 +64,7 @@ export function createApi() {
       return out;
     },
     // Cambio 13: datos de Bamboo. Se cargan aparte y sin romper la app si todavía no se corrió 06_bamboo.sql.
-    async loadBamboo({ admin } = {}) {
+    async loadBamboo({ admin, member } = {}) {
       const todo = async (q) => {           // pagina de a 1000 filas (límite de la API)
         const out = [];
         for (let i = 0; ; i += 1000) {
@@ -79,7 +79,8 @@ export function createApi() {
       try {
         const [employees, days, goals, training, pto, log] = await Promise.all([
           todo(() => sb.from("bamboo_employees").select("*").order("bamboo_id")),
-          todo(() => sb.from("bamboo_days").select("*").gte("day", desde).order("bamboo_id").order("day")),
+          // La persona del equipo carga todo su historial (solo sus días); líderes y Gus, los últimos meses
+          todo(() => (member ? sb.from("bamboo_days").select("*") : sb.from("bamboo_days").select("*").gte("day", desde)).order("bamboo_id").order("day")),
           todo(() => sb.from("bamboo_goals").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_training").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_pto").select("*").order("bamboo_id")),

@@ -727,3 +727,58 @@ button.vis-tag:hover { border-color: var(--primary); color: var(--primary); }
 .bell-g li:not(.is-new) .bi-txt { color: color-mix(in srgb, var(--ink) 78%, var(--muted)); }
 .at-mine .at-row { grid-template-columns: minmax(200px, 3fr) 126px 88px 120px; }
 @media (max-width: 860px) { .at-mine .at-row { grid-template-columns: 1fr 1fr; } }
+
+/* ===== Cambio 20b: menú de la persona ===== */
+.mi-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin-top: 1.4rem; }
+.mi-card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1rem; min-width: 0; }
+.mi-card h2 { font-size: 1.02rem; margin: 0; }
+.ver-todo { color: var(--primary); text-decoration: none; white-space: nowrap; }
+.ver-todo:hover { text-decoration: underline; }
+.mi-mini { list-style: none; margin: 0.6rem 0 0; padding: 0; display: grid; gap: 0.55rem; }
+.mi-mini li { display: flex; flex-direction: column; gap: 0.1rem; padding-left: 0.65rem; border-left: 2px solid var(--line); }
+.mi-mini li.late { border-left-color: var(--late); }
+.clamp-3 { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+@media (max-width: 760px) { .mi-grid { grid-template-columns: 1fr; } }
+
+.cal { border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; background: var(--surface); margin-top: 0.4rem; }
+.cal-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.cal-row + .cal-row { border-top: 1px solid var(--line); }
+.cal-head span { font-size: 0.75rem; font-weight: 650; color: var(--muted); text-align: center; padding: 0.45rem 0; background: var(--surface-2); }
+.cal-head span.we { opacity: 0.7; }
+.cal-d { all: unset; box-sizing: border-box; display: flex; flex-direction: column; align-items: stretch; gap: 0.2rem; padding: 0.35rem; min-height: 74px; cursor: pointer; border-left: 1px solid var(--line); }
+.cal-d:first-child { border-left: 0; }
+.cal-d:disabled { cursor: default; }
+.cal-d.out { background: color-mix(in srgb, var(--surface-2) 55%, transparent); }
+.cal-d.out .cal-n { opacity: 0.35; }
+.cal-d.we:not(.out) { background: color-mix(in srgb, var(--surface-2) 35%, transparent); }
+.cal-d:not(:disabled):hover { background: var(--surface-2); }
+.cal-d:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; }
+.cal-d.sel { box-shadow: inset 0 0 0 2px var(--primary); }
+.cal-d.hoy .cal-n { background: var(--primary); color: var(--primary-ink); border-radius: 999px; padding: 0 0.4rem; }
+.cal-n { font-size: 0.74rem; font-weight: 650; color: var(--muted); align-self: flex-start; }
+.cal-d .c { min-width: 0; width: 100%; min-height: 40px; font-size: 0.82rem; }
+.cal-d .c small { font-size: 0.64rem; }
+.cal-det { margin-top: 0.7rem; background: var(--surface); border: 1px solid var(--line); border-left: 3px solid var(--primary); border-radius: var(--radius-sm); padding: 0.6rem 0.8rem; }
+.cal-det p { margin: 0.2rem 0 0; white-space: pre-wrap; }
+@media (max-width: 600px) {
+  .cal-d { min-height: 56px; padding: 0.2rem; }
+  .cal-d .c { min-height: 30px; font-size: 0.7rem; padding: 0.1rem; }
+  .cal-d .c small { display: none; }
+}
+.dias-list { list-style: none; margin: 0.4rem 0 0; padding: 0; display: grid; gap: 0.35rem; }
+.dias-list li { display: flex; flex-wrap: wrap; gap: 0.2rem 0.6rem; align-items: baseline; padding: 0.35rem 0; border-bottom: 1px solid var(--line); }
+.dias-list li:last-child { border-bottom: 0; }
+.vac-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.6rem; }
+.vac-grid > div { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 0.6rem 0.75rem; display: flex; flex-direction: column; }
+.vac-grid strong { font-size: 1.35rem; font-family: var(--font-display); }
+@media (max-width: 600px) { .vac-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.inc-meses tr { cursor: pointer; }
+.inc-meses tr.on td { background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.inc-meses .grow-col { width: 40%; }
+.bar { display: block; height: 8px; background: var(--surface-2); border-radius: 999px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: color-mix(in srgb, var(--late) 70%, var(--primary)); border-radius: 999px; }
+.small-h { font-size: 0.95rem; color: var(--muted); font-weight: 650; text-transform: none; }
+@media (max-width: 600px) { .inc-meses .grow-col { display: none; } }
+.mi .person-head + .pulse { margin-top: 0.9rem; }
+.mis-horas .hb-legend { margin-top: 0.6rem; }
+.mis-horas .cal-det + .hb-legend { margin-top: 0.6rem; }
