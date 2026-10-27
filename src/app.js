@@ -4,6 +4,7 @@ import htm from "htm";
 import { EN } from "./i18n.js";
 import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
 import { HorasView, ReglasView, BambooPersonBlock } from "./bamboo.js";
+import { IncidenciasView, IncidenciasPersona, conteoMes, umbral } from "./incidencias.js";
 
 const html = htm.bind(h);
 const Ctx = createContext(null);
@@ -25,14 +26,14 @@ export const t = (s, vars) => {
 // Utilidades
 // ---------------------------------------------------------------------
 const localISO = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-const today = () => localISO(new Date());
+export const today = () => localISO(new Date());
 const initials = (n = "") => n.split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join("").toUpperCase();
-const firstName = (n = "") => n.split(" ")[0];
+export const firstName = (n = "") => n.split(" ")[0];
 const MONTHS = {
   es: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"],
   en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
 };
-const fmtDate = (d) => {
+export const fmtDate = (d) => {
   if (!d) return "";
   const [y, m, day] = String(d).slice(0, 10).split("-");
   const mon = MONTHS[LANG][Number(m) - 1];
@@ -162,7 +163,7 @@ export function Modal({ title, onClose, children, wide }) {
   </div>`;
 }
 
-function PersonSelect({ value, onChange, allowEmpty, only, includeInactive }) {
+export function PersonSelect({ value, onChange, allowEmpty, only, includeInactive }) {
   const { data, idx } = useApp();
   const groups = [...data.groups].sort((a, b) => a.sort - b.sort);
   const people = (only ? data.people.filter(only) : data.people).filter((p) => includeInactive || isActive(p) || p.id === value);
@@ -637,7 +638,8 @@ function AddToGroup({ lead, onClose }) {
 
 // Cambio 17: si ya hay una preparación guardada se muestra primero; generar otra es opcional
 const fmtCuando = (ts) => `${fmtDate(String(ts).slice(0, 10))} ${String(new Date(ts).toTimeString()).slice(0, 5)}`;
-function PrepPanel({ person, onClose, history, onGenerated }) {
+// Cambio 18: preparación sobria (resumen arriba, detalle plegado) en pantalla dividida con las notas
+function PrepContent({ person, history, onGenerated }) {
   const { api } = useApp();
   const previas = (history ?? []).filter((g) => g.kind === "prep");
   const [sel, setSel] = useState(previas[0] ?? null);
@@ -660,7 +662,8 @@ function PrepPanel({ person, onClose, history, onGenerated }) {
   };
   const lista = sel && !previas.some((g) => g.id === sel.id) ? [sel, ...previas] : previas;
   const List = ({ title, items }) => items?.length ? html`<section><h3>${title}</h3><ul>${items.map((i) => html`<li>${i}</li>`)}</ul></section>` : null;
-  return html`<${Modal} title=${t("Próxima reunión con {n}", { n: firstName(person.full_name) })} onClose=${onClose} wide>
+  const hayDetalle = prep && [prep.last_time, prep.open_items, prep.what_worked, prep.what_didnt, prep.people].some((x) => x?.length);
+  return html`<div class="prep-wrap">
     ${sel && !busy && html`<div class="ai-bar">
       <span class="small"><span class="pill ai-pill">IA</span> ${t("Generado con IA por {p} · {d}", { p: sel.created_by_name ?? "—", d: fmtCuando(sel.created_at) })}</span>
       <span class="row">
@@ -671,17 +674,40 @@ function PrepPanel({ person, onClose, history, onGenerated }) {
     </div>`}
     ${err ? html`<p class="error">${err}</p>` : busy || !prep ? html`<${Busy} label=${t("La IA está revisando el historial…")} />` : html`<div class="prep">
       <p class="lede">${prep.headline}</p>
-      <div class="prep-grid">
-        <${List} title=${t("Lo que quedó la última vez")} items=${prep.last_time} />
-        <${List} title=${t("Pendientes a revisar")} items=${prep.open_items} />
-        <${List} title=${t("Lo que funcionó")} items=${prep.what_worked} />
-        <${List} title=${t("Lo que no funcionó")} items=${prep.what_didnt} />
-      </div>
-      ${prep.suggested_points?.length > 0 && html`<section><h3>${t("Puntos sugeridos")}</h3>${prep.suggested_points.map((s) => html`<div class="point"><strong>${s.topic}</strong><p class="muted">${s.why}</p><p class="quote">“${s.how_to_open}”</p></div>`)}</section>`}
+      ${prep.summary?.length > 0 && html`<section class="prep-sum"><h3>${t("Resumen")}</h3><ul>${prep.summary.map((x) => html`<li>${x}</li>`)}</ul></section>`}
+      ${prep.suggested_points?.length > 0 && html`<section><h3>${t("Puntos para la reunión")}</h3>${prep.suggested_points.map((s) => html`<div class="point"><strong>${s.topic}</strong>${s.why && html`<p class="muted">${s.why}</p>`}<p class="quote">“${s.how_to_open}”</p></div>`)}</section>`}
       <${List} title=${t("Preguntas clave")} items=${prep.questions} />
-      ${prep.people?.length > 0 && html`<section><h3>${t("Su gente")}</h3><table class="tbl"><tbody>${prep.people.map((p) => html`<tr><td><strong>${p.name}</strong></td><td>${p.status}</td><td class="muted">${p.focus}</td></tr>`)}</tbody></table></section>`}
+      ${hayDetalle && html`<details class="prep-more" open=${!prep.summary?.length}><summary>${t("Ver detalle")}</summary>
+        <div class="prep-grid">
+          <${List} title=${t("Lo que quedó la última vez")} items=${prep.last_time} />
+          <${List} title=${t("Pendientes a revisar")} items=${prep.open_items} />
+          <${List} title=${t("Lo que funcionó")} items=${prep.what_worked} />
+          <${List} title=${t("Lo que no funcionó")} items=${prep.what_didnt} />
+        </div>
+        ${prep.people?.length > 0 && html`<section><h3>${t("Su gente")}</h3><table class="tbl"><tbody>${prep.people.map((p) => html`<tr><td><strong>${p.name}</strong></td><td>${p.status}</td><td class="muted">${p.focus}</td></tr>`)}</tbody></table></section>`}
+      </details>`}
     </div>`}
-  <//>`;
+  </div>`;
+}
+
+function PrepPage({ id }) {
+  const { api, idx } = useApp();
+  const p = idx.person(id);
+  const [hist, setHist] = useState(null);
+  const [notas, setNotas] = useState(() => { try { return localStorage.getItem("tc-prep-notas") !== "0"; } catch (_) { return true; } });
+  useEffect(() => { (api.aiHistory ? api.aiHistory(id) : Promise.resolve([])).then(setHist).catch(() => setHist([])); }, [id]);
+  if (!p) return html`<section class="page"><${Empty}>${t("No encontré a esta persona o no tienes acceso.")}<//></section>`;
+  const toggle = () => { setNotas(!notas); try { localStorage.setItem("tc-prep-notas", notas ? "0" : "1"); } catch (_) {} };
+  return html`<section class="page prep-page">
+    <a class="back" href=${"#/persona/" + p.id}>${p.full_name}</a>
+    <header class="page-head"><div><h1>${t("Próxima reunión con {n}", { n: firstName(p.full_name) })}</h1>
+      <p class="muted">${t("A la izquierda la preparación; a la derecha tus notas de la reunión.")}</p></div>
+      <button onClick=${toggle}>${notas ? t("Ocultar notas") : t("Tomar notas al lado")}</button></header>
+    <div class=${"prep-split" + (notas ? "" : " solo")}>
+      <div class="prep-col">${hist === null ? html`<${Busy} />` : html`<${PrepContent} person=${p} history=${hist} onGenerated=${(g) => setHist([g, ...hist])} />`}</div>
+      ${notas && html`<div class="prep-col notes-col"><h2>${t("Notas de la reunión")}</h2><${MeetingForm} personId=${p.id} compact /></div>`}
+    </div>
+  </section>`;
 }
 
 function IdeasModal({ person, onClose, history }) {
@@ -753,7 +779,7 @@ function PersonView({ id }) {
         ${p.notes && isAdmin && html`<p class="small muted">${p.notes}</p>`}
       </div>
       <div class="head-actions">
-        <button class="primary" onClick=${() => setModal("prep")}>${t("Preparar reunión")}</button>
+        <button class="primary" onClick=${() => go("#/preparar/" + p.id)}>${t("Preparar reunión")}</button>
         ${(() => { const u = (aiHist ?? []).find((g) => g.kind === "prep"); return u ? html`<span class="small muted ai-last" title=${t("Generado con IA por {p} · {d}", { p: u.created_by_name ?? "—", d: fmtCuando(u.created_at) })}>${t("Última: {d} · {p}", { d: fmtDate(String(u.created_at).slice(0, 10)), p: firstName(u.created_by_name ?? "") })}</span>` : null; })()}
         ${(isAdmin || (!isMe && !idx.isLead(p.id))) && html`<button onClick=${() => setModal("note")}>${t("Agregar nota")}</button>`}
         ${isAdmin && html`<button onClick=${() => setModal("ideas")}>${t("Ideas con IA")}</button>`}
@@ -767,6 +793,7 @@ function PersonView({ id }) {
     </div>
 
     <${BambooPersonBlock} person=${p} />
+    <${IncidenciasPersona} person=${p} />
 
     ${(ledGroups.length > 0) && html`<section class="block">
       <div class="row between"><h2>${t("Su gente")}</h2>${isAdmin && html`<button onClick=${() => setModal("add")}>${t("Agregar persona")}</button>`}</div>
@@ -807,7 +834,6 @@ function PersonView({ id }) {
     </div>
 
     ${modal === "note" && html`<${AddNote} person=${p} onClose=${() => setModal(null)} />`}
-    ${modal === "prep" && aiHist !== null && html`<${PrepPanel} person=${p} history=${aiHist} onClose=${() => setModal(null)} onGenerated=${(g) => setAiHist([g, ...(aiHist ?? [])])} />`}
     ${modal === "ideas" && html`<${IdeasModal} person=${p} history=${aiHist} onClose=${() => setModal(null)} />`}
     ${modal === "edit" && html`<${EditPerson} person=${p} onClose=${() => setModal(null)} />`}
     ${modal === "add" && html`<${AddToGroup} lead=${p} onClose=${() => setModal(null)} />`}
@@ -953,8 +979,26 @@ function MeetingView({ id }) {
 }
 
 function NewMeeting() {
+  const { isAdmin } = useApp();
+  return html`<section class="page narrow">
+    <header class="page-head"><div><h1>${t("Nueva reunión")}</h1>
+      <p class="muted">${t("Pega la transcripción de Google Meet o tus notas. Usa la IA para los casos que necesitan análisis; para la gente que va bien, ordena tus notas sin IA (no cuesta nada).")}</p>
+      ${!isAdmin && html`<p class="muted small">${t("Lo de tu gente lo validas tú. Lo que sea sobre ti o sobre otros líderes le llega a Gus para que lo revise.")}</p>`}
+    </div></header>
+    <${MeetingForm} />
+  </section>`;
+}
+
+// Formulario de reunión (también se usa al lado de la preparación). El borrador se guarda en este navegador.
+function MeetingForm({ personId, compact }) {
   const { api, reload, isAdmin, me, data, idx } = useApp();
-  const [f, setF] = useState({ person_id: isAdmin ? "" : me?.person_id ?? "", kind: "1-1", meeting_date: today(), title: "", transcript: "", shared_with_lead: true });
+  const llave = "tc-borrador-" + (personId ?? "nueva");
+  const [f, setF] = useState(() => {
+    const base = { person_id: personId ?? (isAdmin ? "" : me?.person_id ?? ""), kind: "1-1", meeting_date: today(), title: "", transcript: "", shared_with_lead: true };
+    try { const b = JSON.parse(localStorage.getItem(llave) || "null"); if (b && b.transcript) return { ...base, ...b, person_id: base.person_id || b.person_id }; } catch (_) {}
+    return base;
+  });
+  useEffect(() => { try { if (f.transcript.trim()) localStorage.setItem(llave, JSON.stringify(f)); else localStorage.removeItem(llave); } catch (_) {} }, [f]);
   const [busy, setBusy] = useState("");
   const set = (k) => (e) => setF({ ...f, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const withLead = idx.isLead(f.person_id);
@@ -970,15 +1014,12 @@ function NewMeeting() {
       const [m] = await api.insert("meetings", [{ ...f, title: f.title || null, status: "borrador" }]);
       if (mode === "ai") await api.fn("analyze", { meeting_id: m.id });
       else await organizeMeeting(api, data, idx, m);
+      try { localStorage.removeItem(llave); } catch (_) {}
       await reload(); go("#/revisar/" + m.id);
     } catch (x) { toast(x.message, "bad"); setBusy(""); }
   };
   const nwords = f.transcript.trim() ? f.transcript.trim().split(/\s+/).length : 0;
-  return html`<section class="page narrow">
-    <header class="page-head"><div><h1>${t("Nueva reunión")}</h1>
-      <p class="muted">${t("Pega la transcripción de Google Meet o tus notas. Usa la IA para los casos que necesitan análisis; para la gente que va bien, ordena tus notas sin IA (no cuesta nada).")}</p>
-      ${!isAdmin && html`<p class="muted small">${t("Lo de tu gente lo validas tú. Lo que sea sobre ti o sobre otros líderes le llega a Gus para que lo revise.")}</p>`}
-    </div></header>
+  return html`<div class="meeting-form">
     ${busy ? html`<${Busy} label=${busy} />` : html`<div class="stack">
       <div class="row">
         <label class="grow">${t("Con quién")}<${PersonSelect} value=${f.person_id} onChange=${(v) => setF({ ...f, person_id: v })} allowEmpty=${t("Elige una persona")} /></label>
@@ -1005,7 +1046,7 @@ function NewMeeting() {
         <button class="primary" onClick=${() => save("ai")}>${t("Analizar con IA")}</button>
       </div>
     </div>`}
-  </section>`;
+  </div>`;
 }
 
 // ---------------------------------------------------------------------
@@ -1551,18 +1592,21 @@ function Shell({ api, session, onLang }) {
     case "validar": page = isAdmin ? html`<${ValidateView} />` : null; break;
     case "accesos": page = isAdmin ? html`<${AccessView} />` : null; break;
     case "horas": page = html`<${HorasView} />`; break;
+    case "incidencias": page = html`<${IncidenciasView} />`; break;
+    case "preparar": page = html`<${PrepPage} id=${route.id} key=${route.id} />`; break;
     case "reglas": page = html`<${ReglasView} />`; break;
     default: page = html`<${TeamView} />`;
   }
   const nav = [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
+    ["incidencias", t("Incidencias"), (() => { const lim = umbral(bamboo); return [...conteoMes(data.incidents, today().slice(0, 7)).values()].filter((n) => n >= lim).length || null; })()],
     ["reuniones", t("Reuniones"), null],
     ["pendientes", t("Pendientes"), lateCount || null],
     ["ideas", t("Banco de ideas"), null],
     ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : [["reglas", t("Feriados"), null]]),
   ];
-  const active = { persona: "equipo", reunion: "reuniones", revisar: "reuniones" }[route.page] ?? route.page;
+  const active = { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
 
   return html`<${Ctx.Provider} value=${ctx}>
     <div class="shell">

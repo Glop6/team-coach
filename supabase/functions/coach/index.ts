@@ -291,6 +291,51 @@ Analiza y registra. Identifica a cada persona con el roster (apodos como "Vike",
   return { analysis };
 }
 
+// Datos de Bamboo e incidencias de la persona para la IA (Cambio 18). Si algo falta, se omite.
+async function bambooContext(db: any, p: any): Promise<string> {
+  const out: string[] = [];
+  const hoy = new Date(Date.now() - 4 * 3600000).toISOString().slice(0, 10);
+  const mes = hoy.slice(0, 7);
+  const hace90 = new Date(Date.now() - 90 * 86400000).toISOString().slice(0, 10);
+  try {
+    if (p.bamboo_id) {
+      const [g, d, tr, pto] = await Promise.all([
+        db.from("bamboo_goals").select("title,pct,due,state,overdue,soon").eq("bamboo_id", p.bamboo_id),
+        db.from("bamboo_days").select("day,hours,expected,state").eq("bamboo_id", p.bamboo_id).gte("day", mes + "-01").lte("day", hoy),
+        db.from("bamboo_training").select("day,hours,name").eq("bamboo_id", p.bamboo_id).gte("day", hoy.slice(0, 4) + "-01-01"),
+        db.from("bamboo_pto").select("available,total,unplanned,level").eq("bamboo_id", p.bamboo_id).maybeSingle(),
+      ]);
+      const dias = (d.data ?? []).filter((x: any) => x.state !== "en_plazo");
+      if (dias.length) {
+        const esp = dias.reduce((a: number, x: any) => a + Number(x.expected), 0);
+        const cub = dias.reduce((a: number, x: any) => a + (x.state === "falta" ? 0 : x.state === "parcial" ? Math.min(Number(x.hours), Number(x.expected)) : Number(x.expected)), 0);
+        const pend = dias.filter((x: any) => ["falta", "parcial"].includes(x.state)).map((x: any) => x.day.slice(8));
+        const mas = dias.filter((x: any) => ["exceso", "extra"].includes(x.state)).length;
+        out.push(`Horas del mes (Bamboo): ${esp ? Math.floor((100 * cub) / esp) : 100}% registrado${pend.length ? `; días pendientes: ${pend.join(", ")}` : "; sin días pendientes"}${mas ? `; ${mas} día(s) con horas de más` : ""}.`);
+      }
+      for (const x of (g.data ?? []).filter((x: any) => x.state === "en_progreso")) {
+        out.push(`Goal "${x.title}": ${Math.round(Number(x.pct))}%${x.overdue ? ", VENCIDO" : x.soon ? `, vence pronto (${x.due})` : x.due ? `, vence ${x.due}` : ""}.`);
+      }
+      const h = (tr.data ?? []).reduce((a: number, x: any) => a + Number(x.hours), 0);
+      if ((tr.data ?? []).length) out.push(`Training en el año: ${h}h en ${(tr.data ?? []).length} curso(s).`);
+      if (pto.data) out.push(`Vacaciones: ${pto.data.unplanned} días sin planificar de ${pto.data.total}${pto.data.level === "low" ? " (muy atrasado)" : pto.data.level === "mid" ? " (algo atrasado)" : ""}.`);
+    }
+    const { data: inc } = await db.from("incidents").select("occurred_on,category,severity,detail,note,voided")
+      .eq("person_id", p.id).gte("occurred_on", hace90).order("occurred_on", { ascending: false });
+    const act = (inc ?? []).filter((x: any) => !x.voided);
+    if (act.length) {
+      out.push(`Incidencias (últimos 90 días): ${act.length}.`);
+      for (const x of act.slice(0, 8)) out.push(`- ${x.occurred_on} ${x.category} (${x.severity}): ${x.note || x.detail || ""}`);
+    }
+  } catch (_) { /* sin datos extra */ }
+  return out.join("\n");
+}
+
+const SOBRIO = `ESTILO DE SALIDA (obligatorio): sobrio y al punto, para que un líder lo lea en 1 minuto.
+- Frases cortas, sin relleno, sin adjetivos innecesarios, sin repetir lo mismo en varias secciones.
+- Cada punto debe decir qué pasa y cómo abordarlo. Usa números concretos cuando existan (horas, %, incidencias).
+- Si una sección no tiene nada útil, déjala vacía.`;
+
 // ---------------------------------------------------------------------
 async function prep(db: DB, admin: DB, personId: string, who: Who, lang?: string) {
   const { data: p } = await db.from("people").select("*").eq("id", personId).single();
@@ -302,6 +347,7 @@ async function prep(db: DB, admin: DB, personId: string, who: Who, lang?: string
   }
   const ctx = await personContext(db, ids, { insights: 8 });
   const prev = await prevMeetings(admin, p.id, who);
+  const bb = await bambooContext(db, p);
 
   const tool = {
     name: "preparar_reunion",
@@ -309,27 +355,28 @@ async function prep(db: DB, admin: DB, personId: string, who: Who, lang?: string
     input_schema: {
       type: "object",
       properties: {
-        headline: { type: "string", description: "Una frase: dónde estamos con esta persona/grupo" },
-        last_time: { ...strArr, description: "Qué quedó de la última reunión" },
-        open_items: { ...strArr, description: "Pendientes abiertos a revisar" },
-        what_worked: strArr,
-        what_didnt: strArr,
+        headline: { type: "string", description: "Una frase de máximo 15 palabras: dónde estamos con esta persona/grupo" },
+        summary: { ...strArr, description: "Resumen para leer en 30 segundos: 3 a 5 puntos de máximo 18 palabras cada uno, lo esencial y cómo abordarlo (incluye horas/incidencias si importan)" },
+        last_time: { ...strArr, description: "Qué quedó de la última reunión (máximo 3, cortos)" },
+        open_items: { ...strArr, description: "Pendientes abiertos a revisar (máximo 3, cortos)" },
+        what_worked: { ...strArr, description: "Máximo 3, cortos" },
+        what_didnt: { ...strArr, description: "Máximo 3, cortos" },
         suggested_points: {
           type: "array",
           items: {
             type: "object",
-            properties: { topic: str, why: str, how_to_open: { type: "string", description: "Frase o pregunta para abrir el tema" } },
+            properties: { topic: str, why: { type: "string", description: "Máximo 15 palabras" }, how_to_open: { type: "string", description: "Una pregunta corta (máximo 15 palabras) para abrir el tema" } },
             required: ["topic", "why", "how_to_open"],
           },
         },
-        questions: { ...strArr, description: "Preguntas clave para hacer" },
+        questions: { ...strArr, description: "Máximo 3 preguntas clave, de máximo 12 palabras" },
         people: {
           type: "array",
           description: "Solo si la persona es lead: estado breve de cada miembro de su grupo con algo relevante",
           items: { type: "object", properties: { name: str, status: str, focus: str }, required: ["name", "status", "focus"] },
         },
       },
-      required: ["headline", "last_time", "open_items", "what_worked", "what_didnt", "suggested_points", "questions", "people"],
+      required: ["headline", "summary", "last_time", "open_items", "what_worked", "what_didnt", "suggested_points", "questions", "people"],
     },
   };
   const user = `${langRule(lang)}
@@ -340,8 +387,14 @@ REUNIONES ANTERIORES:
 ${(prev ?? []).map((x: any) => `- ${x.meeting_date} (${x.kind}): ${x.summary ?? ""}${x.analysis?.next_meeting_topics?.length ? ` | Para retomar: ${x.analysis.next_meeting_topics.join("; ")}` : ""}`).join("\n") || "—"}
 
 CONTEXTO (feedback, sugerencias y resultados, pendientes):
-${ctx || "—"}`;
-  return { prep: await callClaude(COACH_STYLE, user, tool, 4000) };
+${ctx || "—"}
+
+DESEMPEÑO (Bamboo e incidencias):
+${bb || "—"}
+
+${SOBRIO}
+Máximo 3 puntos sugeridos.`;
+  return { prep: await callClaude(COACH_STYLE, user, tool, 3000) };
 }
 
 // ---------------------------------------------------------------------
@@ -364,7 +417,12 @@ ${focus ? `Gus quiere enfocarse en: ${focus}` : "Enfócate en lo que más impact
 No repitas sugerencias existentes; ajusta según lo que funcionó y lo que no.
 
 HISTORIAL:
-${ctx || "Sin historial todavía."}`;
+${ctx || "Sin historial todavía."}
+
+DESEMPEÑO (Bamboo e incidencias):
+${(await bambooContext(db, p)) || "—"}
+
+${SOBRIO}`;
   const out = await callClaude(COACH_STYLE, user, tool, 3000);
   const rows = (out.suggestions ?? []).map((s: any) => ({
     person_id: p.id, title: s.title, why: s.why, how: s.how, category: s.category, resources: s.resources ?? null,

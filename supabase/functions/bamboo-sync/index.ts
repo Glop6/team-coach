@@ -100,7 +100,32 @@ export type Rules = {
   regionDefault?: Record<string, string>;                                  // país -> región por defecto
   elecciones?: Map<string, { region: string; por: string | null; cuando: string | null }>;
   movidas?: Map<string, { original: string; nuevo: string; nota: string | null; por: string | null; cuando: string | null }[]>;
+  incidentsFrom?: string | null;          // primera semana (lunes) desde la que se crean incidencias automáticas
 };
+
+/** Incidencias automáticas: la semana anterior, una vez vencida (lunes 8:00), por persona con algo que no cuadra. */
+export function incidenciasSemana(ev: Map<string, { dias: Dia[] }>, rules: Rules, ahora: number) {
+  const hoy = iso(new Date(ahora));
+  const lunes = addDays(lunesDe(hoy), -7);
+  if (ahora < limiteDe(lunes, rules.horaLimite)) return null;                  // todavía no venció
+  if (rules.incidentsFrom && lunes < rules.incidentsFrom) return null;          // no se generan hacia atrás
+  const fin = addDays(lunes, 6);
+  const filas: { eid: string; detalle: string; dias: number }[] = [];
+  for (const [eid, v] of ev) {
+    const malos = v.dias.filter((x) => x.fecha >= lunes && x.fecha <= fin &&
+      (PROBLEMA.includes(x.estado) || (["extra", "exceso"].includes(x.estado) && !x.nota && !x.ia)));
+    if (!malos.length) continue;
+    const detalle = malos.map((x) => {
+      const d = `${DIAS[weekday(x.fecha)]} ${fechaMini(x.fecha)}`;
+      if (x.estado === "falta") return `${d}: sin registro`;
+      if (x.estado === "parcial") return `${d}: ${fmtH(x.reg)} de ${fmtH(x.esperado)}h`;
+      if (x.estado === "extra") return `${d}: ${fmtH(x.reg)}h en ${x.feriado ? "feriado" : x.pto ? "PTO" : "día libre"} sin comentario`;
+      return `${d}: ${fmtH(x.reg)}h (más de ${fmtH(x.esperado)}h) sin comentario`;
+    }).join("; ");
+    filas.push({ eid, detalle, dias: malos.length });
+  }
+  return { lunes, vence: lunesDe(hoy), filas };
+}
 
 /** Feriados de UNA persona: los nacionales de su país + el regional de su ciudad, con los cambios de Reglas. */
 export function feriadosPersona(rules: Rules, eid: string, pais: string | null): Feriados {
@@ -703,9 +728,10 @@ export async function cargarReglas(db: any): Promise<Rules> {
     const k = String(r.bamboo_id);
     movidas.set(k, [...(movidas.get(k) ?? []), { original: r.original_day, nuevo: r.new_day, nota: r.note ?? null, por: r.changed_by_name ?? null, cuando: r.changed_at ?? null }]);
   }
+  const incidentsFrom = typeof c.incidents_from === "string" ? c.incidents_from : null;
   const regionDefault = Object.fromEntries(Object.entries((c.default_regions && typeof c.default_regions === "object") ? c.default_regions : {}).map(([k, v]) => [canonPais(k), String(v)]));
   return {
-    feriados, regionales, regionDefault, elecciones, movidas,
+    feriados, regionales, regionDefault, elecciones, movidas, incidentsFrom,
     excluidos: new Set(exc.data.map((r: any) => norm(r.full_name))),
     horarios: Object.fromEntries(hor.data.map((r: any) => [norm(r.full_name), r.days])),
     principales: Array.isArray(c.main_projects) && c.main_projects.length ? c.main_projects : ["DDC"],
@@ -858,6 +884,18 @@ export async function sincronizar(db: any, api: Api, opts: { aiKey?: string; aiM
   });
   await porLotes(ptoRows, 200, (l) => db.from("bamboo_pto").upsert(l));
 
+  // Incidencias automáticas de Bamboo (una por persona y semana; nunca se pisan ni se borran)
+  let incidencias = 0;
+  const inc = incidenciasSemana(ev, rules, ahora);
+  if (inc?.filas.length) {
+    const rows = inc.filas.map((f) => ({ bamboo_id: f.eid, person_id: personaDe.get(f.eid) ?? null, source: "bamboo",
+      category: "Bamboo (registro de horas)", severity: "leve", occurred_on: inc.vence, week_start: inc.lunes,
+      detail: f.detalle, created_by_name: "Bamboo (automático)" }));
+    const { error } = await db.from("incidents").upsert(rows, { onConflict: "source,bamboo_id,week_start", ignoreDuplicates: true });
+    if (error && !/incidents/.test(error.message)) avisos.push(`No pude registrar incidencias: ${error.message}`);
+    else if (!error) incidencias = rows.length;
+  }
+
   const sinFeriados = [...new Set([...ev.values()].map((v) => v.pais).filter((p) => p && !rules.feriados[p!]))];
   if (sinFeriados.length) avisos.push(`Países sin feriados cargados: ${sinFeriados.map((p) => titulo(p!)).join(", ")}`);
   const anios = new Set(Object.values(rules.feriados).flatMap((v) => Object.keys(v).map((f) => f.slice(0, 4))));
@@ -872,7 +910,7 @@ export async function sincronizar(db: any, api: Api, opts: { aiKey?: string; aiM
   const conAlertasMes = pendientesEn((d) => d.startsWith(mesRef));
   return {
     personas: ids.length, dias: dayRows.length, desde: ini, hasta: fin, semana: lunes, con_alertas: conAlertas, con_alertas_mes: conAlertasMes, ia: iaEstado,
-    avisos, enlaces: reporte, segundos: Math.round((Date.now() - t0) / 100) / 10,
+    incidencias, avisos, enlaces: reporte, segundos: Math.round((Date.now() - t0) / 100) / 10,
   };
 }
 
