@@ -1588,6 +1588,13 @@ function AccessView() {
   const leads = data.people.filter((p) => isActive(p) || profileOf(p.id))
     .sort((a, b) => (idx.isLead(b.id) - idx.isLead(a.id)) || a.full_name.localeCompare(b.full_name));
   const sinAcceso = leads.filter((p) => !profileOf(p.id) && isActive(p));
+  // Cambio 21: desactivar el login de alguien (por ejemplo, cuando sale de la empresa)
+  const cambiarAcceso = async (pr) => {
+    const quien = (pr.person_id && idx.person(pr.person_id)?.full_name) || pr.email;
+    if (!confirm(pr.disabled ? t("¿Reactivar el acceso de {n}?", { n: quien }) : t("¿Desactivar el acceso de {n}? No podrá entrar; su historial se conserva.", { n: quien }))) return;
+    try { await api.fn("set_access", { user_id: pr.id, active: !!pr.disabled }); toast(pr.disabled ? t("Acceso reactivado") : t("Acceso desactivado")); reload(); }
+    catch (x) { toast(x.message, "bad"); }
+  };
   return html`<section class="page narrow">
     <header class="page-head"><div><h1>${t("Accesos")}</h1><p class="muted">${t("Crea el usuario de cada persona. Los líderes ven a su gente; las personas del equipo ven solo lo suyo (Mi espacio).")}</p></div>
       <div class="row">${sinAcceso.length > 0 && html`<button class="primary" onClick=${() => setModal({ bulk: true })}>${t("Crear accesos del equipo ({n})", { n: sinAcceso.length })}</button>`}
@@ -1602,10 +1609,11 @@ function AccessView() {
       })}</tbody>
     </table>
     <h2 class="mt">${t("Todos los usuarios")}</h2>
-    <table class="tbl"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id}><td>${pr.email}</td>
+    <table class="tbl"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id} class=${pr.disabled ? "off" : ""}><td>${pr.email}${pr.disabled && html` <span class="pill hb-bad">${t("Desactivado")}</span>`}</td>
       <td>${pr.role === "admin" ? "Admin" : html`<select class="mini" value=${pr.role} aria-label=${t("Rol")} onChange=${async (e) => { try { await api.update("profiles", pr.id, { role: e.target.value }); toast(t("Rol actualizado")); reload(); } catch (x) { toast(x.message, "bad"); } }}>
         <option value="lead">${t("Lead")}</option><option value="member">${t("Persona")}</option></select>`}</td>
-      <td>${pr.role !== "admin" && html`<${PersonSelect} value=${pr.person_id} onChange=${async (v) => { await api.update("profiles", pr.id, { person_id: v }); reload(); }} allowEmpty=${t("Sin vincular")} />`}</td></tr>`)}</tbody></table>
+      <td>${pr.role !== "admin" && html`<${PersonSelect} value=${pr.person_id} onChange=${async (v) => { await api.update("profiles", pr.id, { person_id: v }); reload(); }} allowEmpty=${t("Sin vincular")} />`}</td>
+      <td class="right">${pr.role !== "admin" && "disabled" in pr && html`<button class=${"link small" + (pr.disabled ? "" : " late-t")} onClick=${() => cambiarAcceso(pr)}>${pr.disabled ? t("Reactivar acceso") : t("Desactivar acceso")}</button>`}</td></tr>`)}</tbody></table>
     ${modal?.create && html`<${CredModal} person=${modal.create} onClose=${() => setModal(null)} />`}
     ${modal?.reset && html`<${CredModal} person=${modal.person} profile=${modal.reset} onClose=${() => setModal(null)} />`}
     ${modal?.edit && html`<${EditPerson} person=${{}} onClose=${() => setModal(null)} />`}
@@ -1824,7 +1832,8 @@ function Shell({ api, session, onLang }) {
   if (err) return html`<main class="center"><p class="error">${t("No pude cargar los datos: {e}", { e: err })}</p><button onClick=${() => api.signOut()}>${t("Salir")}</button></main>`;
   if (!data) return html`<main class="center"><${Busy} /></main>`;
 
-  const profile = me ?? { role: "lead" };
+  const profile = me ?? { role: "member" };
+  if (profile.disabled) return html`<main class="center"><div class="aviso-card"><h2>${t("Acceso desactivado")}</h2><p class="muted">${t("Tu acceso a Team Coach está desactivado. Si crees que es un error, habla con Gus.")}</p><button class="primary" onClick=${() => api.signOut()}>${t("Salir")}</button></div></main>`;
   const isAdmin = profile.role === "admin";
   const isMember = profile.role === "member";   // Cambio 20: persona del equipo → solo "Mi espacio"
   const reviewsPending = data.reviews.filter((r) => r.status === "pendiente").length;

@@ -84,7 +84,9 @@ export function createApi() {
           todo(() => sb.from("bamboo_goals").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_training").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_pto").select("*").order("bamboo_id")),
-          sb.from("bamboo_sync_log").select("*").order("started_at", { ascending: false }).limit(15).then(check),
+          // Cambio 21: el registro completo solo lo ve Gus; los demás, la última actualización (si falta el SQL 15, una lista vacía)
+          admin ? sb.from("bamboo_sync_log").select("*").order("started_at", { ascending: false }).limit(15).then(check)
+            : sb.rpc("last_sync").then(({ data, error }) => (error ? sb.from("bamboo_sync_log").select("finished_at,ok").eq("ok", true).order("finished_at", { ascending: false }).limit(1).then(({ data: d }) => d ?? []) : data ?? [])),
         ]);
         const out = { available: true, employees, days, goals, training, pto, log };
         // Feriados y cambios por persona: los ven todos los líderes (si las tablas aún no existen, quedan vacíos)
