@@ -248,7 +248,7 @@ export function IncidenciasPersona({ person }) {
   const lim = umbral(bamboo);
   const lista = mias.filter((i) => todas || !i.voided).slice(0, todas ? 50 : 5);
   return html`<section class="block inc-person">
-    <div class="row between"><h2>${t("Incidencias")} <span class="small muted">· ${t("{n} este mes", { n })}</span>${n >= lim && html` <span class="pill hb-bad">${t("Umbral: hablar con la persona")}</span>`}</h2>
+    <div class="row between"><h2>${t("Incidencias")} <span class="small muted">· ${t("{n} este mes", { n })}</span>${n >= lim && person.id !== ctx.me?.person_id && html` <span class="pill hb-bad">${t("Umbral: hablar con la persona")}</span>`}</h2>
       ${puedeAnotar(ctx, person.id) && html`<button onClick=${() => setNueva(true)}>+ ${t("Incidencia")}</button>`}</div>
     ${lista.length ? html`<ul class="inc-list">${lista.map((i) => html`<${IncidentRow} inc=${i} showPerson=${false} key=${i.id} />`)}</ul>` : html`<${Empty}>${t("Sin incidencias.")}<//>`}
     ${mias.length > 5 || mias.some((i) => i.voided) ? html`<button class="link small" onClick=${() => setTodas(!todas)}>${todas ? t("Ver menos") : t("Ver todas, incluidas las anuladas")}</button>` : ""}

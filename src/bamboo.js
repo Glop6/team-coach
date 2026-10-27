@@ -50,7 +50,8 @@ const hace = (ts) => {
   if (m < 1) return t("hace un momento");
   if (m < 60) return t("hace {n} min", { n: m });
   const h = Math.round(m / 60);
-  return h < 24 ? t("hace {n} h", { n: h }) : t("hace {n} días", { n: Math.round(h / 24) });
+  const d = Math.round(h / 24);
+  return h < 24 ? t("hace {n} h", { n: h }) : d === 1 ? t("hace 1 día") : t("hace {n} días", { n: d });
 };
 
 /** Estado al momento de mirar: un día "en plazo" pasa a falta/parcial cuando vence. */
@@ -495,7 +496,7 @@ function Vacaciones({ ix, gs, match }) {
 // ---------------------------------------------------------------------
 // Bloque en el perfil de la persona
 // ---------------------------------------------------------------------
-export function BambooPersonBlock({ person }) {
+export function BambooPersonBlock({ person, enlace = true }) {
   const { bamboo } = useApp();
   const ix = useMemo(() => (bamboo?.available ? indexBamboo(bamboo) : null), [bamboo]);
   if (!ix || !person?.bamboo_id) return null;
@@ -512,7 +513,7 @@ export function BambooPersonBlock({ person }) {
   const v = ix.pto.get(e.bamboo_id);
   const tieneEquipo = (ix.hijos.get(e.bamboo_id) ?? []).length > 0;
   return html`<section class="block hb-person">
-    <div class="row between"><h2>${t("En Bamboo")}</h2><a class="small" href="#/horas">${tieneEquipo ? t("Ver horas de su equipo") : t("Ver todas las horas")} →</a></div>
+    <div class="row between"><h2>${t("En Bamboo")}</h2>${enlace && html`<a class="small" href="#/horas">${tieneEquipo ? t("Ver horas de su equipo") : t("Ver todas las horas")} →</a>`}</div>
     <div class="hb-pgrid">
       <div class="hb-card hb-wide">
         <h3>${t("Semana {a} – {b}", { a: mini(lunes), b: mini(addDays(lunes, 6)) })}</h3>
@@ -929,3 +930,139 @@ function Cambios() {
 }
 
 export const __test = { setNow: (ms) => { _now = ms; } };
+
+// =====================================================================
+//  Cambio 20b: vistas de la persona del equipo (solo sus datos)
+// =====================================================================
+function usarMiBamboo() {
+  const { bamboo, me, idx } = useApp();
+  const ix = useMemo(() => (bamboo?.available ? indexBamboo(bamboo) : null), [bamboo]);
+  const bid = me?.person_id ? idx.person(me.person_id)?.bamboo_id : null;
+  return { bamboo, ix, bid, e: ix && bid ? ix.emps.get(bid) : null };
+}
+
+function SinBamboo({ titulo: tt, bamboo }) {
+  return html`<section class="page narrow"><h1>${tt}</h1>${!bamboo ? html`<${Busy} />`
+    : !bamboo.available ? html`<p class="warn mt">${t("La conexión con Bamboo todavía no está lista.")}</p>`
+    : html`<${Empty}>${t("Tu usuario todavía no está enlazado con Bamboo. Avísale a Gus.")}<//>`}</section>`;
+}
+
+const mesTxt = (ini) => `${titulo(MESES()[Number(ini.slice(5, 7)) - 1])} ${ini.slice(0, 4)}`;
+const mesMas = (ini, n) => { const y = Number(ini.slice(0, 4)), m = Number(ini.slice(5, 7)) - 1 + n; return `${y + Math.floor(m / 12)}-${String(((m % 12) + 12) % 12 + 1).padStart(2, "0")}-01`; };
+
+export function MisHoras() {
+  const { bamboo, ix, bid, e } = usarMiBamboo();
+  const hoy = hoyLocal();
+  const [mes, setMes] = useState(hoy.slice(0, 8) + "01");
+  const [sel, setSel] = useState(null);
+  if (!e) return html`<${SinBamboo} titulo=${t("Mis horas")} bamboo=${bamboo} />`;
+  const dm = ix.days.get(bid) ?? new Map();
+  const minDia = [...dm.keys()].sort()[0] ?? hoy;
+  const fin = finDeMes(mes);
+  const diasMes = []; for (let d = mes; d <= fin; d = addDays(d, 1)) diasMes.push(d);
+  const r = resumir(diasMes.filter((d) => d <= hoy).map((d) => dm.get(d)).filter(Boolean));
+  const conNota = diasMes.map((d) => dm.get(d)).filter((d) => d && (d.note || d.reason) && !r.problemas.includes(d.day));
+  const semanas = []; for (let w = lunesDe(mes); w <= fin; w = addDays(w, 7)) semanas.push(Array.from({ length: 7 }, (_, i) => addDays(w, i)));
+  const fer = feriadosDe(bamboo.rules, e, mes.slice(0, 4)).lista.filter((f) => (f.movida?.new_day ?? f.day).startsWith(mes.slice(0, 7)) || f.day.startsWith(mes.slice(0, 7)));
+  const ultimo = bamboo.log?.find((l) => l.ok);
+  const canPrev = mesMas(mes, -1) >= minDia.slice(0, 8) + "01";
+  const canNext = mesMas(mes, 1) <= hoy;
+  const detalle = sel && dm.get(sel);
+  const sinDatos = !diasMes.some((d) => dm.has(d));
+  return html`<section class="page mis-horas">
+    <header class="page-head"><div><h1>${t("Mis horas")}</h1>
+      <p class="muted">${ultimo ? t("Datos de Bamboo, actualizados {h}.", { h: hace(ultimo.finished_at) }) : ""} ${t("La semana vence el lunes siguiente a las 8:00 (hora de Bolivia).")}</p></div></header>
+    <div class="row between hb-period">
+      <div class="row">
+        <button class="icon" disabled=${!canPrev} onClick=${() => { setMes(mesMas(mes, -1)); setSel(null); }} aria-label=${t("Anterior")}>‹</button>
+        <strong class="hb-plabel">${mesTxt(mes)}</strong>
+        <button class="icon" disabled=${!canNext} onClick=${() => { setMes(mesMas(mes, 1)); setSel(null); }} aria-label=${t("Siguiente")}>›</button>
+        ${mes.slice(0, 7) !== hoy.slice(0, 7) && html`<button class="link small" onClick=${() => { setMes(hoy.slice(0, 8) + "01"); setSel(null); }}>${t("Ir al mes actual")}</button>`}
+      </div>
+      <span class="small muted">${t("Historial desde {d}", { d: mini(minDia) + " " + minDia.slice(0, 4) })}</span>
+    </div>
+    ${sinDatos ? html`<${Empty}>${t("No hay datos de Bamboo para este mes.")}<//>` : html`
+    <div class="pulse">
+      <span class=${"pulse-item" + (r.pct < 95 ? " alert" : "")}><strong>${Math.floor(r.pct)}%</strong> ${t("cubierto")}</span>
+      <span class="pulse-item"><strong>${fmtH(r.reg)}h</strong> ${t("registradas de {e}h esperadas", { e: fmtH(r.esp) })}</span>
+      <span class=${"pulse-item" + (r.problemas.length ? " alert" : "")}><strong>${r.problemas.length}</strong> ${r.problemas.length === 1 ? t("día pendiente") : t("días pendientes")}</span>
+      ${r.de_mas > 0 && html`<span class="pulse-item gold"><strong>+${fmtH(r.de_mas)}h</strong> ${t("de más")}</span>`}
+      ${r.adic > 0 && html`<span class="pulse-item"><strong>${fmtH(r.adic)}h</strong> ${t("en proyectos adicionales")}</span>`}
+    </div>
+    <div class="cal" role="grid" aria-label=${mesTxt(mes)}>
+      <div class="cal-row cal-head" role="row">${DIAS().map((d, i) => html`<span role="columnheader" class=${i >= 5 ? "we" : ""}>${d}</span>`)}</div>
+      ${semanas.map((w) => html`<div class="cal-row" role="row">${w.map((d) => {
+        const fuera = !d.startsWith(mes.slice(0, 7));
+        const x = dm.get(d);
+        return html`<button type="button" role="gridcell" class=${"cal-d" + (fuera ? " out" : "") + (weekday(d) >= 5 ? " we" : "") + (d === hoy ? " hoy" : "") + (sel === d ? " sel" : "")}
+          disabled=${fuera || !x} onClick=${() => setSel(sel === d ? null : d)} aria-label=${larga(d)}>
+          <span class="cal-n">${Number(d.slice(8, 10))}</span>${!fuera && x ? html`<${Celda} d=${x} />` : html`<span class="c vacio"></span>`}</button>`;
+      })}</div>`)}
+    </div>
+    ${detalle && html`<div class="cal-det"><strong>${larga(sel)}</strong>${tooltip(detalle).split("\n").slice(0).map((l, i) => html`<p class=${i ? "small muted" : "small"}>${i ? l : l.split(": ").slice(1).join(": ")}</p>`)}</div>`}
+    <${Leyenda} mes=${false} />
+    ${r.problemas.length > 0 && html`<section class="block"><h2>${t("Días a completar")}</h2>
+      <ul class="dias-list">${r.problemas.map((d) => { const x = dm.get(d); return html`<li key=${d}><button type="button" class="link" onClick=${() => setSel(d)}>${larga(d)}</button>
+        <span class="small">${t("{a}h de {b}h", { a: fmtH(x.hours), b: fmtH(x.expected) })}</span>${x.reason && html`<span class="small muted">· ${x.reason}</span>`}</li>`; })}</ul>
+      <p class="small muted">${t("Complétalos en Bamboo; se actualiza solo durante el día.")}</p></section>`}
+    ${conNota.length > 0 && html`<section class="block"><h2>${t("Días con comentarios")}</h2>
+      <ul class="dias-list">${conNota.map((x) => html`<li key=${x.day}><button type="button" class="link" onClick=${() => setSel(x.day)}>${larga(x.day)}</button><span class="small muted">${x.note ? `“${x.note}”` : x.reason}</span></li>`)}</ul></section>`}
+    ${fer.length > 0 && html`<section class="block"><h2>${t("Feriados del mes")}</h2>
+      <ul class="dias-list">${fer.map((f) => html`<li key=${f.day}><span>${larga(f.movida?.new_day ?? f.day)}</span><span class="small muted">${f.name}${f.region ? ` · ${f.region}` : ""}${f.movida ? ` · ${t("movido del {d}", { d: mini(f.day) })}` : ""}${Number(f.fraction) < 1 ? ` · ${t("medio día")}` : ""}</span></li>`)}</ul></section>`}
+    `}
+  </section>`;
+}
+
+export function MiDesarrollo() {
+  const { bamboo, ix, bid, e } = usarMiBamboo();
+  const hoy = hoyLocal();
+  if (!e) return html`<${SinBamboo} titulo=${t("Mi desarrollo")} bamboo=${bamboo} />`;
+  const goals = [...(ix.goals.get(bid) ?? [])].sort((a, b) => (a.state === "en_progreso" ? 0 : 1) - (b.state === "en_progreso" ? 0 : 1) || String(a.due ?? "9").localeCompare(String(b.due ?? "9")));
+  const trn = [...(ix.training.get(bid) ?? [])].sort((a, b) => String(b.day ?? "").localeCompare(String(a.day ?? "")));
+  const r = resumenDev(goals, trn, hoy);
+  const v = ix.pto.get(bid);
+  const dic = hoy.slice(5, 7) === "12";
+  const anios = [...new Set(trn.map((x) => (x.day ?? "").slice(0, 4)).filter(Boolean))];
+  const proximos = feriadosDe(bamboo.rules, e, hoy.slice(0, 4)).lista.concat(feriadosDe(bamboo.rules, e, String(Number(hoy.slice(0, 4)) + 1)).lista)
+    .filter((f) => (f.movida?.new_day ?? f.day) >= hoy).slice(0, 6);
+  return html`<section class="page narrow mi-dev">
+    <header class="page-head"><div><h1>${t("Mi desarrollo")}</h1><p class="muted">${t("Tus goals, estudio y vacaciones, tal como están en Bamboo.")}</p></div></header>
+    <section class="block">
+      <h2>${t("Goals")}</h2>
+      <div class="pulse">
+        <span class="pulse-item"><strong>${r.activos}</strong> ${t("en curso")}</span>
+        <span class="pulse-item"><strong>${r.avance === null ? "—" : Math.round(r.avance) + "%"}</strong> ${t("avance promedio")}</span>
+        <span class="pulse-item"><strong>${r.completados}</strong> ${r.completados === 1 ? t("completado") : t("completados")}</span>
+        ${r.vencidos.length > 0 && html`<span class="pulse-item alert"><strong>${r.vencidos.length}</strong> ${t("vencidos")}</span>`}
+      </div>
+      ${goals.length ? html`<div class="hb-det">${goals.map((g) => html`<${GoalItem} g=${g} key=${g.goal_id} />`)}</div>` : html`<${Empty}>${t("Sin goals en Bamboo.")}<//>`}
+    </section>
+    <section class="block">
+      <h2>${t("Estudio")}</h2>
+      <div class="pulse">
+        <span class="pulse-item"><strong>${fmtH(r.h_mes)}h</strong> ${t("este mes")}</span>
+        <span class="pulse-item"><strong>${fmtH(r.h_anio)}h</strong> ${t("en {y}", { y: hoy.slice(0, 4) })}</span>
+        <span class="pulse-item"><strong>${r.n_cursos}</strong> ${t("registros en el año")}</span>
+      </div>
+      ${trn.length ? anios.map((y) => html`<h3 class="small mt-s">${y}</h3><ul class="dias-list">${trn.filter((x) => (x.day ?? "").startsWith(y)).map((x) => html`<li key=${x.record_id}>
+          <span><b>${mini(x.day)}</b> ${x.name}</span><span class="small muted">${fmtH(x.hours)}h${x.notes ? ` · ${x.notes.slice(0, 120)}` : ""}</span>
+          ${(x.links ?? []).map((u) => html`<a class="small" href=${u} target="_blank" rel="noopener">${t("certificado")}</a>`)}</li>`)}</ul>`)
+        : html`<${Empty}>${t("Sin cursos registrados.")}<//>`}
+    </section>
+    <section class="block">
+      <h2>${t("Vacaciones")}</h2>
+      ${v ? html`<div class="vac-grid">
+          <div><span class="small muted">${t("Total año")}</span><strong>${fmtH(v.total)}</strong></div>
+          <div><span class="small muted">${t("Usados")}</span><strong>${fmtH(v.used)}</strong></div>
+          <div><span class="small muted">${t("Planificados")}</span><strong>${fmtH(v.planned)}</strong></div>
+          <div><span class="small muted">${t("Sin planificar")}</span><strong>${fmtH(v.unplanned)}</strong></div>
+        </div>
+        <p class="small mt-s">${nivelPill(v, dic)} ${dic ? t("Diciembre: máximo 3 días sin planificar.") : t("Lo ideal hoy es tener como máximo {i} días sin planificar, para llegar a fin de año en 0.", { i: Math.round(Number(v.ideal)) })}</p>`
+        : html`<${Empty}>${t("No hay saldos de vacaciones disponibles.")}<//>`}
+    </section>
+    ${proximos.length > 0 && html`<section class="block">
+      <h2>${t("Próximos feriados")}</h2>
+      <ul class="dias-list">${proximos.map((f) => html`<li key=${f.day}><span>${larga(f.movida?.new_day ?? f.day)} ${(f.movida?.new_day ?? f.day).slice(0, 4) !== hoy.slice(0, 4) ? (f.movida?.new_day ?? f.day).slice(0, 4) : ""}</span><span class="small muted">${f.name}${f.region ? ` · ${f.region}` : ""}${f.movida ? ` · ${t("movido del {d}", { d: mini(f.day) })}` : ""}</span></li>`)}</ul>
+    </section>`}
+  </section>`;
+}

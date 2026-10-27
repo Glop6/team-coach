@@ -50,6 +50,9 @@ export function createApi() {
         out.incidents = ie ? [] : inc ?? []; out.incidents_error = ie ? ie.message : null; }
       // Campanita (Cambio 19): hasta cuándo revisé cada sección. Sin la tabla, todo sigue igual.
       { const { data: us, error: ue } = await sb.from("user_seen").select("*"); out.user_seen = ue ? [] : us ?? []; out.user_seen_error = ue ? ue.message : null; }
+      // Cambio 20: comentarios en pendientes y "mis reuniones" (solo personas del equipo). Sin el SQL, todo sigue igual.
+      { const { data: ac, error: ae } = await sb.from("action_comments").select("*").order("created_at").limit(5000); out.action_comments = ae ? [] : ac ?? []; out.action_comments_error = ae ? ae.message : null; }
+      { const { data: mm, error: me } = await sb.rpc("my_meetings"); out.my_meetings = me ? [] : mm ?? []; }
       // Quiénes son líderes (aunque no sean de mis grupos)
       try { const { data: lids } = await sb.rpc("lead_ids"); out.lead_ids = (lids ?? []).map((x) => (typeof x === "string" ? x : x.lead_ids ?? Object.values(x)[0])); } catch (_) { out.lead_ids = []; }
       // Reuniones que Gus compartió con un lead: solo resumen y temas
@@ -61,7 +64,7 @@ export function createApi() {
       return out;
     },
     // Cambio 13: datos de Bamboo. Se cargan aparte y sin romper la app si todavía no se corrió 06_bamboo.sql.
-    async loadBamboo({ admin } = {}) {
+    async loadBamboo({ admin, member } = {}) {
       const todo = async (q) => {           // pagina de a 1000 filas (límite de la API)
         const out = [];
         for (let i = 0; ; i += 1000) {
@@ -76,7 +79,8 @@ export function createApi() {
       try {
         const [employees, days, goals, training, pto, log] = await Promise.all([
           todo(() => sb.from("bamboo_employees").select("*").order("bamboo_id")),
-          todo(() => sb.from("bamboo_days").select("*").gte("day", desde).order("bamboo_id").order("day")),
+          // La persona del equipo carga todo su historial (solo sus días); líderes y Gus, los últimos meses
+          todo(() => (member ? sb.from("bamboo_days").select("*") : sb.from("bamboo_days").select("*").gte("day", desde)).order("bamboo_id").order("day")),
           todo(() => sb.from("bamboo_goals").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_training").select("*").order("bamboo_id")),
           todo(() => sb.from("bamboo_pto").select("*").order("bamboo_id")),

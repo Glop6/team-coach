@@ -9,6 +9,8 @@
 //    notify         (lead)   → avisa a Gus por correo que hay puntos por revisar
 //    create_user    (admin)  → crea el login de un colaborador
 //    reset_password (admin)  → cambia la contraseña de un colaborador
+//    create_users   (admin)  → crea en lote los logins del equipo (rol "member", deben cambiar la contraseña al entrar)
+//  Las personas del equipo (rol "member") no pueden usar ninguna acción de esta función.
 //  Secretos (Edge Functions → Secrets):
 //    ANTHROPIC_API_KEY   (obligatorio)
 //    ANTHROPIC_MODEL     (opcional, por defecto claude-sonnet-5-5)
@@ -580,6 +582,27 @@ async function probarLogin(email: string, password: string): Promise<string | nu
   return null;
 }
 
+// Crea un login. Rol: "lead" si la persona es líder; si no, "member" (ve solo lo suyo).
+async function crearAcceso(admin: any, emailIn: string, passwordIn: string, personId: string | null, forzarCambio: boolean) {
+  const email = emailIn.trim().toLowerCase();
+  const password = passwordIn.trim();
+  if (!email.includes("@")) return { ok: false, error: "Correo inválido." };
+  if (password.length < 8) return { ok: false, error: "La contraseña debe tener al menos 8 caracteres." };
+  let role = "lead";
+  if (personId) {
+    const { data: p } = await admin.from("people").select("is_lead").eq("id", personId).maybeSingle();
+    const { count } = await admin.from("group_leads").select("person_id", { count: "exact", head: true }).eq("person_id", personId);
+    role = p?.is_lead || (count ?? 0) > 0 ? "lead" : "member";
+  }
+  const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
+  if (error) return { ok: false, error: /already been registered|already exists/i.test(error.message) ? "Ya existe un usuario con este correo." : error.message };
+  await admin.from("profiles").upsert({ id: data.user.id, email, role, person_id: personId, must_change_password: forzarCambio && role === "member" });
+  if (personId) await admin.from("people").update({ email }).eq("id", personId);
+  const check = await probarLogin(email, password);
+  if (check) return { ok: false, created: true, user_id: data.user.id, role, error: `Se creó el usuario, pero la contraseña no funciona al entrar: ${check}. Usa "Nueva contraseña".` };
+  return { ok: true, user_id: data.user.id, role };
+}
+
 // ---------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -592,6 +615,7 @@ Deno.serve(async (req) => {
     if (!user) return json({ error: "Sesión inválida. Vuelve a iniciar sesión." }, 401);
     const { data: me } = await db.from("profiles").select("role,person_id").eq("id", user.id).single();
     const isAdmin = me?.role === "admin";
+    if (me?.role === "member") return json({ error: "Esta función es solo para líderes." }, 403);
 
     const body = await req.json().catch(() => ({}));
     const action = body.action as string;
@@ -616,19 +640,23 @@ Deno.serve(async (req) => {
       return json(r);
     }
 
+    if (action === "create_users") {
+      const lista = Array.isArray(body.users) ? body.users.slice(0, 25) : [];
+      const out: any[] = [];
+      for (const u of lista) {
+        const r = await crearAcceso(admin, String(u.email ?? ""), String(u.password ?? ""), u.person_id ?? null, true);
+        out.push({ person_id: u.person_id ?? null, email: String(u.email ?? "").trim().toLowerCase(), ...r });
+      }
+      return json({ ok: true, results: out });
+    }
+
     if (action === "create_user" || action === "reset_password") {
       const password = String(body.password ?? "").trim();
       if (password.length < 8) return json({ error: "La contraseña debe tener al menos 8 caracteres." }, 400);
       if (action === "create_user") {
-        const email = String(body.email ?? "").trim().toLowerCase();
-        if (!email.includes("@")) return json({ error: "Correo inválido." }, 400);
-        const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
-        if (error) return json({ error: error.message }, 400);
-        await admin.from("profiles").upsert({ id: data.user.id, email, role: "lead", person_id: body.person_id ?? null, must_change_password: false });
-        if (body.person_id) await admin.from("people").update({ email }).eq("id", body.person_id);
-        const check = await probarLogin(email, password);
-        if (check) return json({ error: `Se creó el usuario, pero la contraseña no funciona al entrar: ${check}. Usa "Nueva contraseña".` }, 500);
-        return json({ ok: true, user_id: data.user.id, verified: true });
+        const r = await crearAcceso(admin, String(body.email ?? ""), password, body.person_id ?? null, false);
+        if (r.error) return json({ error: r.error }, r.created ? 500 : 400);
+        return json({ ok: true, user_id: r.user_id, role: r.role, verified: true });
       } else {
         const { data: upd, error } = await admin.auth.admin.updateUserById(body.user_id, { password, email_confirm: true });
         if (error) return json({ error: error.message }, 400);
