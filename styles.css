@@ -782,3 +782,7 @@ button.vis-tag:hover { border-color: var(--primary); color: var(--primary); }
 .mi .person-head + .pulse { margin-top: 0.9rem; }
 .mis-horas .hb-legend { margin-top: 0.6rem; }
 .mis-horas .cal-det + .hb-legend { margin-top: 0.6rem; }
+.tbl tr.off td:not(:last-child) { opacity: 0.6; }
+.aviso-card { max-width: 420px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.6rem 1.4rem; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; }
+.aviso-card h2 { margin: 0; }
+.aviso-card p { margin: 0 0 0.4rem; }

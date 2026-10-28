@@ -10,6 +10,7 @@
 //    create_user    (admin)  → crea el login de un colaborador
 //    reset_password (admin)  → cambia la contraseña de un colaborador
 //    create_users   (admin)  → crea en lote los logins del equipo (rol "member", deben cambiar la contraseña al entrar)
+//    set_access     (admin)  → desactiva o reactiva el login de alguien (por ejemplo, cuando sale de la empresa)
 //  Las personas del equipo (rol "member") no pueden usar ninguna acción de esta función.
 //  Secretos (Edge Functions → Secrets):
 //    ANTHROPIC_API_KEY   (obligatorio)
@@ -596,7 +597,12 @@ async function crearAcceso(admin: any, emailIn: string, passwordIn: string, pers
   }
   const { data, error } = await admin.auth.admin.createUser({ email, password, email_confirm: true });
   if (error) return { ok: false, error: /already been registered|already exists/i.test(error.message) ? "Ya existe un usuario con este correo." : error.message };
-  await admin.from("profiles").upsert({ id: data.user.id, email, role, person_id: personId, must_change_password: forzarCambio && role === "member" });
+  const { error: pe } = await admin.from("profiles").upsert({ id: data.user.id, email, role, person_id: personId, must_change_password: forzarCambio && role === "member" });
+  if (pe) {
+    // Sin perfil correcto no se deja la cuenta creada (quedaría con un rol equivocado)
+    await admin.auth.admin.deleteUser(data.user.id).catch(() => {});
+    return { ok: false, error: `No se pudo guardar el perfil (${pe.message}). No se creó el acceso; vuelve a intentarlo.` };
+  }
   if (personId) await admin.from("people").update({ email }).eq("id", personId);
   const check = await probarLogin(email, password);
   if (check) return { ok: false, created: true, user_id: data.user.id, role, error: `Se creó el usuario, pero la contraseña no funciona al entrar: ${check}. Usa "Nueva contraseña".` };
@@ -613,8 +619,9 @@ Deno.serve(async (req) => {
     const db = createClient(SUPABASE_URL, apikey, { global: { headers: { Authorization: auth } } });
     const { data: { user } } = await db.auth.getUser(auth.replace(/^Bearer\s+/i, ""));
     if (!user) return json({ error: "Sesión inválida. Vuelve a iniciar sesión." }, 401);
-    const { data: me } = await db.from("profiles").select("role,person_id").eq("id", user.id).single();
+    const { data: me } = await db.from("profiles").select("*").eq("id", user.id).single();
     const isAdmin = me?.role === "admin";
+    if (me?.disabled) return json({ error: "Tu acceso está desactivado." }, 403);
     if (me?.role === "member") return json({ error: "Esta función es solo para líderes." }, 403);
 
     const body = await req.json().catch(() => ({}));
@@ -638,6 +645,20 @@ Deno.serve(async (req) => {
       const r = await ideas(db, body.person_id, body.focus, body.lang);
       await guardarIA(admin, who, body.person_id, "ideas", { focus: body.focus ?? null, titles: r.titles }, body.lang);
       return json(r);
+    }
+
+    if (action === "set_access") {
+      const id = String(body.user_id ?? "");
+      const activo = body.active === true;
+      if (!id || id === user.id) return json({ error: "No puedes desactivar tu propio acceso." }, 400);
+      const { data: pr } = await admin.from("profiles").select("role").eq("id", id).maybeSingle();
+      if (!pr) return json({ error: "Usuario no encontrado." }, 404);
+      if (pr.role === "admin") return json({ error: "No se puede desactivar a un admin." }, 400);
+      const { error } = await admin.auth.admin.updateUserById(id, { ban_duration: activo ? "none" : "876000h" });
+      if (error) return json({ error: error.message }, 400);
+      const { error: e2 } = await admin.from("profiles").update({ disabled: !activo }).eq("id", id);
+      if (e2) return json({ error: `Se ${activo ? "reactivó" : "bloqueó"} el login, pero no se pudo marcar el perfil: ${e2.message}` }, 500);
+      return json({ ok: true, active: activo });
     }
 
     if (action === "create_users") {

@@ -1,5 +1,13 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Desactivado": "Disabled",
+  "Reactivar acceso": "Reactivate access",
+  "Desactivar acceso": "Disable access",
+  "¿Reactivar el acceso de {n}?": "Reactivate {n}'s access?",
+  "¿Desactivar el acceso de {n}? No podrá entrar; su historial se conserva.": "Disable {n}'s access? They won't be able to sign in; their history is kept.",
+  "Acceso reactivado": "Access reactivated",
+  "Acceso desactivado": "Access disabled",
+  "Tu acceso a Team Coach está desactivado. Si crees que es un error, habla con Gus.": "Your Team Coach access is disabled. If you think this is a mistake, talk to Gus.",
   "hace 1 día": "1 day ago",
   "día pendiente": "pending day",
   "completado": "completed",
