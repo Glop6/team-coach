@@ -804,3 +804,39 @@ button.primary.kudos-btn { background: var(--kudos); color: #fff; border-color: 
 .seg.lang button { padding-left: 0.6rem; padding-right: 0.6rem; font-size: 0.78rem; font-weight: 650; letter-spacing: 0.02em; }
 /* La campanita siempre por encima del contenido (la barra lateral es "sticky" y arma su propia capa) */
 .side { z-index: 30; }
+
+/* ===== Cambio 23: vista de incidencias y kudos por período ===== */
+/* Colores del gráfico validados para daltonismo (incidencias naranja, kudos verde), con su versión oscura */
+:root { --ch-inc: #e8763a; --ch-kud: #127a5c; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --ch-inc: #d9663a; --ch-kud: #24a577; } }
+:root[data-theme="dark"] { --ch-inc: #d9663a; --ch-kud: #24a577; }
+.periodo-bar { flex-wrap: wrap; gap: 0.6rem; align-items: center; }
+.chart-box { position: relative; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 0.9rem 0.4rem; margin-top: 0.9rem; }
+.chart-legend { display: flex; gap: 1rem; color: var(--muted); margin-bottom: 0.2rem; }
+.chart-legend i, .chart-tip i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 0.35rem; vertical-align: -1px; }
+.sw-inc { background: var(--ch-inc); } .sw-kud { background: var(--ch-kud); }
+.chart-scroll { position: relative; overflow-x: auto; }
+.chart { display: block; max-width: 100%; height: auto; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .ax { fill: var(--muted); font-size: 10px; font-family: var(--font-body); }
+.chart .ax-on { fill: var(--ink); font-weight: 700; }
+.chart .b-inc { fill: var(--ch-inc); } .chart .b-kud { fill: var(--ch-kud); }
+.chart .col-sel { fill: color-mix(in srgb, var(--primary) 9%, transparent); }
+.chart .col.hov .b-inc, .chart .col.hov .b-kud { opacity: 0.85; }
+.chart .hit { fill: transparent; }
+.chart-tip { position: absolute; top: 4px; transform: translateX(-50%); background: var(--surface); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 18px rgb(0 0 0 / 0.14);
+  padding: 0.4rem 0.6rem; font-size: 0.78rem; display: flex; flex-direction: column; gap: 0.1rem; pointer-events: none; white-space: nowrap; z-index: 2; }
+.trend-up { color: var(--late); font-weight: 650; white-space: nowrap; }
+.trend-down { color: var(--ok, #1f9d6b); font-weight: 650; white-space: nowrap; }
+.trend-eq { color: var(--muted); white-space: nowrap; }
+.inc-sum tr.cero td { color: var(--muted); }
+.hist-p { border-top: 1px solid var(--line); padding-top: 1rem; margin-top: 1.2rem; }
+.hist-mes { margin-top: 0.9rem; }
+.hist-mes h3 { margin: 0 0 0.4rem; }
+
+.tbl-scroll { max-width: 100%; overflow-x: auto; }
+@media (max-width: 760px) {
+  .periodo-bar .seg { display: flex; flex-wrap: wrap; border: 0; gap: 0.3rem; }
+  .periodo-bar .seg button { border: 1px solid var(--line) !important; border-radius: 999px; }
+  .inc-page .page-head .row { flex-wrap: wrap; }
+}
