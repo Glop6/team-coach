@@ -786,3 +786,21 @@ button.vis-tag:hover { border-color: var(--primary); color: var(--primary); }
 .aviso-card { max-width: 420px; text-align: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.6rem 1.4rem; display: flex; flex-direction: column; align-items: center; gap: 0.6rem; }
 .aviso-card h2 { margin: 0; }
 .aviso-card p { margin: 0 0 0.4rem; }
+
+/* ===== Cambio 22: kudos y selector de idioma ===== */
+:root { --kudos: #0f9f6e; --kudos-bg: color-mix(in srgb, #0f9f6e 12%, transparent); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --kudos: #4fd39c; } }
+:root[data-theme="dark"] { --kudos: #4fd39c; }
+.kudos-pill { display: inline-flex; align-items: center; gap: 0.25rem; background: var(--kudos-bg); color: var(--kudos); }
+.inc.kudos { border-color: color-mix(in srgb, var(--kudos) 35%, var(--line)); box-shadow: inset 3px 0 0 var(--kudos); }
+.inc.kudos.is-new { box-shadow: inset 3px 0 0 var(--kudos); }
+button.kudos-btn { border-color: color-mix(in srgb, var(--kudos) 55%, transparent); color: var(--kudos); background: var(--kudos-bg); }
+button.kudos-btn:hover { background: color-mix(in srgb, var(--kudos) 20%, transparent); }
+button.primary.kudos-btn { background: var(--kudos); color: #fff; border-color: var(--kudos); }
+.inc-cats.kudos .chip-btn.on { background: var(--kudos); border-color: var(--kudos); color: #fff; }
+.kudos-pulse strong, .kudos-t { color: var(--kudos); }
+.mi-mini li.kudos { border-left-color: var(--kudos); }
+.bell-g li.kudos a { border-left-color: var(--kudos); }
+.seg.lang button { padding-left: 0.6rem; padding-right: 0.6rem; font-size: 0.78rem; font-weight: 650; letter-spacing: 0.02em; }
+/* La campanita siempre por encima del contenido (la barra lateral es "sticky" y arma su propia capa) */
+.side { z-index: 30; }

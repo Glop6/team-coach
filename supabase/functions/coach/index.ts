@@ -49,10 +49,9 @@ Reglas:
 - Ten en cuenta lo que ya se probó y su resultado: no repitas lo que "no funcionó" sin cambiarlo; refuerza lo que "funcionó".
 - Fechas en formato AAAA-MM-DD.`;
 
-const langRule = (lang?: string) =>
-  lang === "en" ? "IDIOMA DE SALIDA: inglés (English)." : lang === "auto"
-    ? "IDIOMA DE SALIDA: el idioma predominante de la transcripción (español o inglés). Los valores de los enums (kind, owner, priority, outcome) se mantienen exactamente como están definidos."
-    : "IDIOMA DE SALIDA: español neutro.";
+// Cambio 22: toda la salida de la IA en inglés, aunque las notas o la transcripción estén en español
+const langRule = (_lang?: string) =>
+  "OUTPUT LANGUAGE: English, always — even when the notes, comments or transcript are in Spanish. Translate names of topics and actions into natural English. Keep enum values (kind, owner, priority, outcome, status) exactly as defined in the schema; never translate them.";
 
 // ---------------------------------------------------------------------
 async function callClaude(system: string, user: string, tool: Record<string, unknown>, maxTokens = 8000) {
@@ -323,9 +322,15 @@ async function bambooContext(db: any, p: any): Promise<string> {
       if ((tr.data ?? []).length) out.push(`Training en el año: ${h}h en ${(tr.data ?? []).length} curso(s).`);
       if (pto.data) out.push(`Vacaciones: ${pto.data.unplanned} días sin planificar de ${pto.data.total}${pto.data.level === "low" ? " (muy atrasado)" : pto.data.level === "mid" ? " (algo atrasado)" : ""}.`);
     }
-    const { data: inc } = await db.from("incidents").select("occurred_on,category,severity,detail,note,voided")
+    const { data: inc } = await db.from("incidents").select("*")
       .eq("person_id", p.id).gte("occurred_on", hace90).order("occurred_on", { ascending: false });
-    const act = (inc ?? []).filter((x: any) => !x.voided);
+    // Cambio 22: los kudos (cosas positivas) van aparte, para reconocerlos en la reunión
+    const kud = (inc ?? []).filter((x: any) => !x.voided && x.kind === "kudos");
+    if (kud.length) {
+      out.push(`Kudos / reconocimientos (últimos 90 días): ${kud.length}.`);
+      for (const x of kud.slice(0, 8)) out.push(`- ${x.occurred_on} ${x.category}${x.note ? `: ${x.note}` : ""} (de ${x.created_by_name ?? "—"})`);
+    }
+    const act = (inc ?? []).filter((x: any) => !x.voided && x.kind !== "kudos");
     if (act.length) {
       out.push(`Incidencias (últimos 90 días): ${act.length}.`);
       for (const x of act.slice(0, 8)) out.push(`- ${x.occurred_on} ${x.category} (${x.severity}): ${x.note || x.detail || ""}`);
@@ -392,10 +397,12 @@ ${(prev ?? []).map((x: any) => `- ${x.meeting_date} (${x.kind}): ${x.summary ?? 
 CONTEXTO (feedback, sugerencias y resultados, pendientes):
 ${ctx || "—"}
 
-DESEMPEÑO (Bamboo e incidencias):
+DESEMPEÑO (Bamboo, kudos e incidencias):
 ${bb || "—"}
 
 ${SOBRIO}
+- Equilibra lo positivo y lo que hay que mejorar: si hay kudos, inclúyelos en el resumen y abre la reunión reconociéndolos con un ejemplo concreto.
+- Las incidencias se tratan como oportunidades de mejora con una acción clara, nunca como castigo.
 Máximo 3 puntos sugeridos.`;
   return { prep: await callClaude(COACH_STYLE, user, tool, 3000) };
 }
@@ -531,16 +538,17 @@ async function notify(admin: DB, reviewId: string, userId: string) {
   const { data: m } = await admin.from("meetings").select("title,meeting_date,kind,person_id,summary").eq("id", rv.meeting_id).single();
   const { data: withP } = m?.person_id ? await admin.from("people").select("full_name").eq("id", m.person_id).single() : { data: null as any };
   const key = Deno.env.get("RESEND_API_KEY");
-  if (!key) return { emailed: false, reason: "Falta RESEND_API_KEY" };
+  if (!key) return { emailed: false, reason: "RESEND_API_KEY is missing" };
   const items = (rv.items ?? []) as any[];
-  const title = m?.title || `${m?.kind ?? "Reunión"} con ${withP?.full_name ?? "—"}`;
+  const KIND_EN: Record<string, string> = { "1-1": "1:1", mensual: "Monthly", grupal: "Group", otro: "Meeting" };
+  const title = m?.title || `${KIND_EN[String(m?.kind ?? "")] ?? "Meeting"} with ${withP?.full_name ?? "—"}`;
   const html = `<div style="font-family:Arial,sans-serif;max-width:560px">
-  <h2 style="margin:0 0 8px">${esc(rv.author_name ?? "Un lead")} subió una reunión</h2>
+  <h2 style="margin:0 0 8px">${esc(rv.author_name ?? "A lead")} uploaded a meeting</h2>
   <p style="color:#555;margin:0 0 12px">${esc(title)} · ${esc(m?.meeting_date ?? "")}</p>
   ${m?.summary ? `<p>${esc(m.summary)}</p>` : ""}
-  <h3 style="margin:16px 0 6px">${items.length ? `Puntos para que revises (${items.length})` : "No hay puntos para ti; es solo un aviso."}</h3>
+  <h3 style="margin:16px 0 6px">${items.length ? `Items for you to review (${items.length})` : "Nothing for you to review; this is just a heads-up."}</h3>
   <ul>${items.map((i) => `<li><b>${esc(i.person_name ?? "—")}</b>: ${esc(i.body ?? i.title ?? "")}</li>`).join("")}</ul>
-  <p><a href="${esc(APP_URL)}#/validar" style="background:#23535a;color:#fff;padding:10px 16px;border-radius:999px;text-decoration:none">Revisar en Team Coach</a></p>
+  <p><a href="${esc(APP_URL)}#/validar" style="background:#2459d6;color:#fff;padding:10px 16px;border-radius:999px;text-decoration:none">Review in Team Coach</a></p>
 </div>`;
   const r = await fetch("https://api.resend.com/emails", {
     method: "POST",
@@ -548,7 +556,7 @@ async function notify(admin: DB, reviewId: string, userId: string) {
     body: JSON.stringify({
       from: "Team Coach <onboarding@resend.dev>",
       to: [NOTIFY_EMAIL],
-      subject: `${rv.author_name ?? "Un lead"} subió "${title}"${items.length ? ` · ${items.length} por revisar` : ""}`,
+      subject: `${rv.author_name ?? "A lead"} uploaded "${title}"${items.length ? ` · ${items.length} to review` : ""}`,
       html,
     }),
   });

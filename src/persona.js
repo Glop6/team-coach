@@ -8,9 +8,9 @@
 import { h } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, getLang, Empty, fmtDate, today, firstName, Avatar, ActionTable, NoteItem, MEETING_KIND, OPEN, isOverdue } from "./app.js";
+import { useApp, t, getLang, srv, Empty, fmtDate, today, firstName, Avatar, ActionTable, NoteItem, MEETING_KIND, OPEN, isOverdue } from "./app.js";
 import { BambooPersonBlock } from "./bamboo.js";
-import { IncidentRow, esMia, nuevas, vistoDesde, SevPill } from "./incidencias.js";
+import { IncidentRow, esMia, nuevas, vistoDesde, SevPill, esKudos, KudosPill } from "./incidencias.js";
 
 const html = htm.bind(h);
 const mesDe = (d) => String(d ?? "").slice(0, 7);
@@ -44,8 +44,9 @@ export function MiEspacio() {
   const abiertos = data.actions.filter((a) => a.owner_id === p.id && OPEN.includes(a.status)).sort((a, b) => (a.due_date ?? "9").localeCompare(b.due_date ?? "9"));
   const vencidos = abiertos.filter(isOverdue).length;
   const mes = today().slice(0, 7);
-  const incs = (data.incidents ?? []).filter((i) => esMia(ctx, i));
-  const incMes = incs.filter((i) => !i.voided && mesDe(i.occurred_on) === mes);
+  const incs = (data.incidents ?? []).filter((i) => esMia(ctx, i)).sort((a, b) => String(b.occurred_on).localeCompare(String(a.occurred_on)) || String(b.created_at).localeCompare(String(a.created_at)));
+  const incMes = incs.filter((i) => !i.voided && !esKudos(i) && mesDe(i.occurred_on) === mes);
+  const kudosMes = incs.filter((i) => !i.voided && esKudos(i) && mesDe(i.occurred_on) === mes);
   const nuevasN = nuevas(ctx).filter((i) => esMia(ctx, i)).length;
   const reus = data.my_meetings ?? [];
   const ultima = reus.find((m) => m.status === "aplicado") ?? reus[0];
@@ -61,6 +62,7 @@ export function MiEspacio() {
     </header>
     <div class="pulse">
       <a href="#/pendientes" class=${"pulse-item" + (vencidos ? " alert" : "")}><strong>${abiertos.length}</strong> ${abiertos.length === 1 ? t("pendiente abierto") : t("pendientes abiertos")}${vencidos ? html` · <span class="late-t">${t("{n} vencidos", { n: vencidos })}</span>` : ""}</a>
+      <a href="#/incidencias" class="pulse-item kudos-pulse"><strong>${kudosMes.length}</strong> ${t("kudos este mes")}</a>
       <a href="#/incidencias" class=${"pulse-item" + (incMes.length ? " alert" : "")}><strong>${incMes.length}</strong> ${t("incidencias este mes")}</a>
       <a href="#/reuniones" class="pulse-item"><strong>${reus.length}</strong> ${reus.length === 1 ? t("reunión") : t("reuniones")}</a>
     </div>
@@ -76,10 +78,10 @@ export function MiEspacio() {
           : html`<p class="muted small">${t("No tienes pendientes abiertos.")}</p>`}
       </section>
       <section class="mi-card">
-        <div class="row between"><h2>${t("Incidencias")}${nuevasN > 0 && html` <span class="pill new-pill">${t("{n} nuevas", { n: nuevasN })}</span>`}</h2><${VerTodo} href="#/incidencias" /></div>
-        ${incs.filter((i) => !i.voided).length ? html`<ul class="mi-mini">${incs.filter((i) => !i.voided).slice(0, 3).map((i) => html`<li key=${i.id}>
-            <span>${t(i.category)} <${SevPill} s=${i.severity} /></span><span class="small muted">${fmtDate(i.occurred_on)}${i.note || i.detail ? " · " + (i.note || i.detail) : ""}</span></li>`)}</ul>`
-          : html`<p class="muted small">${t("Sin incidencias.")}</p>`}
+        <div class="row between"><h2>${t("Incidencias y kudos")}${nuevasN > 0 && html` <span class="pill new-pill">${t("{n} nuevas", { n: nuevasN })}</span>`}</h2><${VerTodo} href="#/incidencias" /></div>
+        ${incs.filter((i) => !i.voided).length ? html`<ul class="mi-mini">${incs.filter((i) => !i.voided).slice(0, 3).map((i) => html`<li key=${i.id} class=${esKudos(i) ? "kudos" : ""}>
+            <span>${esKudos(i) ? html`<${KudosPill} /> ` : ""}${t(i.category)} ${!esKudos(i) && html`<${SevPill} s=${i.severity} />`}</span><span class="small muted">${fmtDate(i.occurred_on)}${i.note || i.detail ? " · " + (i.note || srv(i.detail)) : ""}</span></li>`)}</ul>`
+          : html`<p class="muted small">${t("Sin registros todavía.")}</p>`}
       </section>
       <section class="mi-card">
         <div class="row between"><h2>${t("Última reunión")}</h2><${VerTodo} href="#/reuniones" /></div>
@@ -104,6 +106,7 @@ export function MisIncidencias() {
   const { ctx, p } = usarPersona();
   const { data } = ctx;
   const [mes, setMes] = useState("todos");
+  const [tipo, setTipo] = useState("todo");
   const [verAnuladas, setVerAnuladas] = useState(false);
   const [desde] = useState(() => vistoDesde(ctx, "incidents"));
   useEffect(() => { if (!data.incidents_error) ctx.markSeen?.("incidents"); }, []);
@@ -111,25 +114,28 @@ export function MisIncidencias() {
   const incs = (data.incidents ?? []).filter((i) => esMia(ctx, i));
   const nuevasIds = new Set(nuevas(ctx, desde).map((i) => i.id));
   const meses = [...new Set([today().slice(0, 7), ...incs.map((i) => mesDe(i.occurred_on))])].sort().reverse();
-  const resumen = meses.map((m) => { const xs = incs.filter((i) => !i.voided && mesDe(i.occurred_on) === m); return { m, n: xs.length, crit: xs.filter((i) => i.severity === "critica").length, auto: xs.filter((i) => i.source === "bamboo").length }; });
+  const resumen = meses.map((m) => { const xs = incs.filter((i) => !i.voided && mesDe(i.occurred_on) === m); const ins = xs.filter((i) => !esKudos(i));
+    return { m, n: ins.length, crit: ins.filter((i) => i.severity === "critica").length, auto: ins.filter((i) => i.source === "bamboo").length, kudos: xs.filter(esKudos).length }; });
   const max = Math.max(1, ...resumen.map((r) => r.n));
-  const lista = incs.filter((i) => (mes === "todos" || mesDe(i.occurred_on) === mes) && (verAnuladas || !i.voided));
+  const lista = incs.filter((i) => (mes === "todos" || mesDe(i.occurred_on) === mes) && (verAnuladas || !i.voided)
+    && (tipo === "todo" || (tipo === "kudos" ? esKudos(i) : !esKudos(i))));
   const anuladas = incs.filter((i) => i.voided && (mes === "todos" || mesDe(i.occurred_on) === mes)).length;
   return html`<section class="page">
-    <header class="page-head"><div><h1>${t("Mis incidencias")}</h1>
-      <p class="muted">${t("Lo que se registró sobre ti, para conversarlo con tu líder. Si algo no está bien, háblalo con tu líder o con Gus.")}</p></div></header>
-    ${nuevasIds.size > 0 && html`<p class="inc-new-note small"><span class="pill new-pill">${t("Nueva")}</span> ${nuevasIds.size === 1 ? t("1 incidencia nueva desde tu última visita.") : t("{n} incidencias nuevas desde tu última visita.", { n: nuevasIds.size })}</p>`}
-    ${incs.length > 0 && html`<table class="tbl inc-meses"><thead><tr><th>${t("Mes")}</th><th class="grow-col"></th><th class="right">${t("Incidencias")}</th><th class="right">${t("Críticas")}</th><th class="right">${t("Bamboo")}</th></tr></thead>
+    <header class="page-head"><div><h1>${t("Incidencias y kudos")}</h1>
+      <p class="muted">${t("Lo que se registró sobre ti: lo que hiciste bien (kudos) y lo que hay que mejorar, para conversarlo con tu líder. Si algo no está bien, háblalo con tu líder o con Gus.")}</p></div></header>
+    ${nuevasIds.size > 0 && html`<p class="inc-new-note small"><span class="pill new-pill">${t("Nueva")}</span> ${nuevasIds.size === 1 ? t("1 registro nuevo desde tu última visita.") : t("{n} registros nuevos desde tu última visita.", { n: nuevasIds.size })}</p>`}
+    ${incs.length > 0 && html`<table class="tbl inc-meses"><thead><tr><th>${t("Mes")}</th><th class="grow-col"></th><th class="right">${t("Kudos")}</th><th class="right">${t("Incidencias")}</th><th class="right">${t("Críticas")}</th><th class="right">${t("Bamboo")}</th></tr></thead>
       <tbody>${resumen.map((r) => html`<tr key=${r.m} class=${mes === r.m ? "on" : ""} onClick=${() => setMes(mes === r.m ? "todos" : r.m)}>
         <td>${nombreMes(r.m)}</td><td class="grow-col"><span class="bar"><i style=${`width:${(100 * r.n) / max}%`}></i></span></td>
-        <td class="right"><b>${r.n}</b></td><td class="right">${r.crit || "—"}</td><td class="right">${r.auto || "—"}</td></tr>`)}</tbody></table>`}
+        <td class="right kudos-t">${r.kudos ? "★ " + r.kudos : "—"}</td><td class="right"><b>${r.n}</b></td><td class="right">${r.crit || "—"}</td><td class="right">${r.auto || "—"}</td></tr>`)}</tbody></table>`}
     <div class="row hb-bar mt">
       <select class="mini" value=${mes} onChange=${(e) => setMes(e.target.value)} aria-label=${t("Mes")}>
         <option value="todos">${t("Todos los meses")}</option>${meses.map((m) => html`<option value=${m}>${nombreMes(m)}</option>`)}</select>
+      <div class="seg">${[["todo", t("Todo")], ["kudos", t("Kudos")], ["inc", t("Incidencias")]].map(([k, l]) => html`<button class=${tipo === k ? "on" : ""} aria-pressed=${tipo === k} onClick=${() => setTipo(k)}>${l}</button>`)}</div>
       <label class="check small"><input type="checkbox" checked=${verAnuladas} onChange=${(e) => setVerAnuladas(e.target.checked)} />${t("Ver anuladas ({n})", { n: anuladas })}</label>
     </div>
     ${lista.length ? html`<ul class="inc-list">${lista.map((i) => html`<${IncidentRow} inc=${i} key=${i.id} showPerson=${false} nueva=${nuevasIds.has(i.id)} />`)}</ul>`
-      : html`<${Empty}>${mes === "todos" ? t("Sin incidencias.") : t("No hay incidencias en este mes.")}<//>`}
+      : html`<${Empty}>${mes === "todos" ? t("Sin registros todavía.") : t("No hay registros en este mes.")}<//>`}
   </section>`;
 }
 
