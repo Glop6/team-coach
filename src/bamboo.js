@@ -464,7 +464,7 @@ function FilaDev({ e, r, ix }) {
     </tr>
     ${open && html`<tr class="hb-detail"><td colspan="6"><div class="hb-det">
       <h4 class="small">${t("Goals")}</h4>${goals.length ? goals.map((g) => html`<${GoalItem} g=${g} />`) : html`<p class="small muted">${t("Sin goals en Bamboo.")}</p>`}
-      <h4 class="small mt">${t("Training")}</h4>${trn.length ? trn.map((x) => html`<p class="small"><b>${x.day ? mini(x.day) : "—"}</b> ${x.name}${x.notes ? ` · ${x.notes.slice(0, 80)}` : ""} · ${fmtH(x.hours)}h ${x.links?.map((u) => html` <a href=${u} target="_blank" rel="noopener" onClick=${(ev) => ev.stopPropagation()}>${t("certificado")}</a>`)}</p>`) : html`<p class="small muted">${t("Sin cursos registrados.")}</p>`}
+      <h4 class="small mt">${t("Training")}</h4>${trn.length ? trn.map((x) => html`<p class="small"><b>${x.day ? mini(x.day) : "—"}</b> ${txAhora(x.name)}${x.notes ? ` · ${txAhora(x.notes).slice(0, 80)}` : ""} · ${fmtH(x.hours)}h ${x.links?.map((u) => html` <a href=${u} target="_blank" rel="noopener" onClick=${(ev) => ev.stopPropagation()}>${t("certificado")}</a>`)}</p>`) : html`<p class="small muted">${t("Sin cursos registrados.")}</p>`}
     </div></td></tr>`}`;
 }
 
@@ -672,7 +672,7 @@ function Horarios() {
     <p class="muted">${t("Quien no está aquí trabaja de lunes a viernes, 8 h por día. Los días fuera de su horario no se exigen; si registra horas ahí, se marca como horas en día libre.")}</p>
     <table class="tbl"><thead><tr><th>${t("Persona")}</th><th>${t("Días que trabaja")}</th><th>${t("Nota")}</th><th></th></tr></thead>
       <tbody>${rows.map((r) => html`<tr key=${r.id}><td>${r.full_name}${!enBamboo.has(norm(r.full_name)) && html` <span class="pill hb-warn" title=${t("No coincide con ningún nombre de Bamboo")}>${t("no está en Bamboo")}</span>`}</td>
-        <td>${rangoTxt(r.days)}</td><td class="small muted">${r.note}</td>
+        <td>${rangoTxt(r.days)}</td><td class="small muted"><${Tx} s=${r.note} /></td>
         <td class="right"><button class="link small" onClick=${() => { setNombre(r.full_name); setDias(r.days); setNota(r.note ?? ""); }}>${t("Editar")}</button>
           <button class="link small late-t" onClick=${async () => { if (confirm(t("¿Quitar el horario de {n}?", { n: r.full_name }))) { await api.remove("rule_schedules", r.id); reloadBamboo(); } }}>${t("Quitar")}</button></td></tr>`)}</tbody></table>
     <form class="hb-form stack-s mt" onSubmit=${guardar}>
@@ -777,7 +777,7 @@ function Excluidos() {
   };
   return html`<div class="block-s">
     <p class="muted">${t("Personas que no se revisan (por ejemplo, ya no están o no registran horas). Quien sale de Bamboo como inactivo se quita solo.")}</p>
-    <table class="tbl"><tbody>${rows.map((r) => html`<tr key=${r.id}><td>${r.full_name}</td><td class="small muted">${r.note}</td>
+    <table class="tbl"><tbody>${rows.map((r) => html`<tr key=${r.id}><td>${r.full_name}</td><td class="small muted"><${Tx} s=${r.note} /></td>
       <td class="right"><button class="link small late-t" onClick=${async () => { await api.remove("rule_excluded", r.id); reloadBamboo(); toast(t("Vuelve a revisarse en la próxima actualización")); }}>${t("Quitar")}</button></td></tr>`)}</tbody></table>
     <form class="row mt" onSubmit=${add}>
       <label class="grow">${t("Nombre (como está en Bamboo)")}<input list="bb-nombres2" value=${nombre} onInput=${(e) => setNombre(e.target.value)} /></label>
@@ -939,7 +939,7 @@ function Cambios() {
     <p class="muted">${t("Cambios de ciudad y de fecha de feriados hechos por los líderes (y por ti). Los más recientes primero.")}</p>
     ${rows.length ? html`<table class="tbl"><thead><tr><th>${t("Cuándo")}</th><th>${t("Quién")}</th><th>${t("Persona")}</th><th>${t("Cambio")}</th></tr></thead>
       <tbody>${rows.map((r) => html`<tr key=${r.id}><td class="small nowrap">${new Date(r.at).toLocaleString(getLang() === "en" ? "en-US" : "es-BO", { dateStyle: "medium", timeStyle: "short" })}</td>
-        <td>${r.by_name}</td><td>${r.person_name}</td><td class="small">${r.detail}</td></tr>`)}</tbody></table>`
+        <td>${r.by_name}</td><td>${r.person_name}</td><td class="small">${srv(r.detail)}</td></tr>`)}</tbody></table>`
       : html`<${Empty}>${t("Todavía no hay cambios.")}<//>`}
   </div>`;
 }
@@ -1060,7 +1060,7 @@ export function MiDesarrollo() {
         <span class="pulse-item"><strong>${r.n_cursos}</strong> ${t("registros en el año")}</span>
       </div>
       ${trn.length ? anios.map((y) => html`<h3 class="small mt-s">${y}</h3><ul class="dias-list">${trn.filter((x) => (x.day ?? "").startsWith(y)).map((x) => html`<li key=${x.record_id}>
-          <span><b>${mini(x.day)}</b> ${x.name}</span><span class="small muted">${fmtH(x.hours)}h${x.notes ? ` · ${x.notes.slice(0, 120)}` : ""}</span>
+          <span><b>${mini(x.day)}</b> ${txAhora(x.name)}</span><span class="small muted">${fmtH(x.hours)}h${x.notes ? ` · ${txAhora(x.notes).slice(0, 120)}` : ""}</span>
           ${(x.links ?? []).map((u) => html`<a class="small" href=${u} target="_blank" rel="noopener">${t("certificado")}</a>`)}</li>`)}</ul>`)
         : html`<${Empty}>${t("Sin cursos registrados.")}<//>`}
     </section>

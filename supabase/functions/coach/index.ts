@@ -66,7 +66,7 @@ async function callClaude(system: string, user: string, tool: Record<string, unk
       max_tokens: maxTokens,
       system: system + `\n\nResponde ÚNICAMENTE llamando a la herramienta "${tool.name}", sin texto adicional.`,
       tools: [tool],
-      tool_choice: { type: "auto" },
+      tool_choice: { type: "tool", name: tool.name },
       messages: [{ role: "user", content: user }],
     }),
   });
@@ -571,35 +571,67 @@ async function sha256(s: string) {
   const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
   return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
-async function traducir(admin: any, textos: string[]) {
-  const lista = [...new Set(textos.filter((x) => typeof x === "string").map((x) => x.slice(0, 3000)).filter((x) => x.trim()))].slice(0, 60);
-  if (!lista.length) return {};
-  const hashes = await Promise.all(lista.map((x) => sha256("en|" + x)));
-  const { data: hechas } = await admin.from("translations").select("hash,result").in("hash", hashes);
-  const porHash = new Map((hechas ?? []).map((r: any) => [r.hash, r.result]));
-  const faltan = lista.map((x, i) => ({ x, h: hashes[i] })).filter((o) => !porHash.has(o.h));
-  if (faltan.length) {
-    const tool = {
-      name: "traducciones",
-      description: "Traducciones al inglés, en el mismo orden.",
-      input_schema: { type: "object", properties: { items: { type: "array", items: { type: "string" } } }, required: ["items"] },
-    };
-    const user = `Translate each item into natural, professional English for a workplace coaching tool. Rules:
-- Keep the same order and the same number of items (${faltan.length}).
+// Cambio 25: traducción más robusta — cada texto vuelve con su número (no se mezclan si la IA junta o salta uno),
+// los textos largos van en tandas chicas y hay un tope diario por usuario (Gus sin tope).
+const TX_TANDA = 6000;  // caracteres por llamada a la IA
+async function traducirTanda(items: { x: string; h: string }[]) {
+  const tool = {
+    name: "traducciones",
+    description: "Traducciones al inglés: una por texto, con su número.",
+    input_schema: { type: "object", properties: { items: { type: "array", items: { type: "object", properties: { i: { type: "integer" }, en: { type: "string" } }, required: ["i", "en"] } } }, required: ["items"] },
+  };
+  const user = `Translate each item into natural, professional English for a workplace coaching tool. Rules:
+- Return one object per item: {"i": <the item's number>, "en": <translation>}. Never merge or skip items.
 - Keep people's names, product names (WOMS, Salesforce, SFX, PowerApps, Bamboo), numbers and dates; write dates like "Oct 5".
 - If an item is already in English, return it unchanged. Do not add explanations, quotes or notes.
 - Short labels (a topic of one to three words) stay short labels, lowercase like the original.
 
 ITEMS (JSON):
-${JSON.stringify(faltan.map((o) => o.x))}`;
-    const r: any = await callClaude("You are a precise translator from Spanish to English.", user, tool, 4000, Deno.env.get("TRANSLATE_MODEL") ?? "claude-haiku-5-5");
-    const out: string[] = Array.isArray(r?.items) ? r.items : [];
-    const filas = faltan.map((o, i) => ({ hash: o.h, lang: "en", source: o.x, result: typeof out[i] === "string" && out[i].trim() ? out[i] : o.x }));
-    for (const f of filas) porHash.set(f.hash, f.result);
-    if (out.length === faltan.length) await admin.from("translations").upsert(filas).then(() => {}, () => {});
+${JSON.stringify(items.map((o, i) => ({ i, es: o.x })))}`;
+  const largo = items.reduce((a, o) => a + o.x.length, 0);
+  const r: any = await callClaude("You are a precise translator from Spanish to English.", user, tool, Math.min(8000, 600 + Math.ceil(largo / 2)), Deno.env.get("TRANSLATE_MODEL") ?? "claude-haiku-5-5");
+  const out = new Map<string, string>();
+  for (const it of Array.isArray(r?.items) ? r.items : []) {
+    const o = items[Number(it?.i)];
+    if (o && typeof it?.en === "string" && it.en.trim()) out.set(o.h, it.en.trim());
+  }
+  return out;
+}
+async function traducir(admin: any, textos: string[], uid: string | null, sinTope: boolean) {
+  const lista = [...new Set(textos.filter((x) => typeof x === "string").map((x) => x.slice(0, 3000)).filter((x) => x.trim()))].slice(0, 60);
+  if (!lista.length) return {};
+  const hashes = await Promise.all(lista.map((x) => sha256("en|" + x)));
+  const { data: hechas } = await admin.from("translations").select("hash,result").in("hash", hashes);
+  const porHash = new Map((hechas ?? []).map((r: any) => [r.hash, r.result]));
+  let faltan = lista.map((x, i) => ({ x, h: hashes[i] })).filter((o) => !porHash.has(o.h));
+  // Tope diario por usuario (textos nuevos). Si la columna aún no existe (falta 18), no hay tope.
+  if (faltan.length && !sinTope && uid) {
+    const tope = Number(Deno.env.get("TRANSLATE_DAILY_LIMIT") ?? 1500);
+    const desde = new Date(Date.now() - 86400000).toISOString();
+    const { count, error } = await admin.from("translations").select("hash", { count: "exact", head: true }).eq("requested_by", uid).gte("created_at", desde);
+    if (!error) faltan = faltan.slice(0, Math.max(0, tope - (count ?? 0)));
+  }
+  if (faltan.length) {
+    const tandas: { x: string; h: string }[][] = [];
+    let actual: { x: string; h: string }[] = [], suma = 0;
+    for (const o of faltan) {
+      if (actual.length && suma + o.x.length > TX_TANDA) { tandas.push(actual); actual = []; suma = 0; }
+      actual.push(o); suma += o.x.length;
+    }
+    if (actual.length) tandas.push(actual);
+    const resultados = await Promise.all(tandas.slice(0, 8).map((tn) => traducirTanda(tn).catch(() => new Map<string, string>())));
+    const filas: any[] = [];
+    for (const m of resultados) for (const [h, en] of m) {
+      porHash.set(h, en);
+      filas.push({ hash: h, lang: "en", source: faltan.find((o) => o.h === h)!.x, result: en, requested_by: uid });
+    }
+    if (filas.length) {
+      const { error } = await admin.from("translations").upsert(filas);
+      if (error) await admin.from("translations").upsert(filas.map(({ requested_by: _r, ...f }) => f)).then(() => {}, () => {});
+    }
   }
   const res: Record<string, string> = {};
-  lista.forEach((x, i) => { res[x] = porHash.get(hashes[i]) as string; });
+  lista.forEach((x, i) => { const v = porHash.get(hashes[i]); if (typeof v === "string") res[x] = v; });
   return res;
 }
 
@@ -672,7 +704,7 @@ Deno.serve(async (req) => {
     const action = body.action as string;
     const admin0 = createClient(SUPABASE_URL, SERVICE_KEY);
     // Traducir lo que ya se ve en pantalla: disponible para todos (también las personas del equipo)
-    if (action === "translate") return json({ results: await traducir(admin0, Array.isArray(body.texts) ? body.texts : []) });
+    if (action === "translate") return json({ results: await traducir(admin0, Array.isArray(body.texts) ? body.texts : [], user.id, isAdmin) });
     if (me?.role === "member") return json({ error: "Esta función es solo para líderes." }, 403);
 
     const admin = createClient(SUPABASE_URL, SERVICE_KEY);

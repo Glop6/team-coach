@@ -40,18 +40,31 @@ export function createApi() {
       if (error) throw new Error(error.message);
     },
     async loadAll() {
+      // Cambio 25: Supabase entrega como máximo 1.000 filas por consulta; se pide de a páginas para no perder datos
+      // cuando una tabla crece (notas, pendientes, incidencias, comentarios).
+      const todas = async (q, orden) => {
+        const out = [];
+        for (let i = 0; ; i += 1000) {
+          let qq = q();
+          for (const [c, asc] of orden) qq = qq.order(c, { ascending: asc });
+          const { data, error } = await qq.range(i, i + 999);
+          if (error) return { data: null, error };
+          out.push(...(data ?? []));
+          if (!data || data.length < 1000) return { data: out, error: null };
+        }
+      };
       const res = await Promise.all(
-        TABLES.map((t) => sb.from(t).select("*").limit(5000))
+        TABLES.map((t) => todas(() => sb.from(t).select("*"), t === "group_leads" ? [["group_id", true], ["person_id", true]] : [["id", true]]))
       );
       const out = {};
       TABLES.forEach((t, i) => (out[t] = check(res[i]) ?? []));
       // Incidencias (Cambio 18): si la tabla aún no existe, la app sigue igual
-      { const { data: inc, error: ie } = await sb.from("incidents").select("*").order("occurred_on", { ascending: false }).order("created_at", { ascending: false }).limit(3000);
+      { const { data: inc, error: ie } = await todas(() => sb.from("incidents").select("*"), [["occurred_on", false], ["created_at", false], ["id", true]]);
         out.incidents = ie ? [] : inc ?? []; out.incidents_error = ie ? ie.message : null; }
       // Campanita (Cambio 19): hasta cuándo revisé cada sección. Sin la tabla, todo sigue igual.
       { const { data: us, error: ue } = await sb.from("user_seen").select("*"); out.user_seen = ue ? [] : us ?? []; out.user_seen_error = ue ? ue.message : null; }
       // Cambio 20: comentarios en pendientes y "mis reuniones" (solo personas del equipo). Sin el SQL, todo sigue igual.
-      { const { data: ac, error: ae } = await sb.from("action_comments").select("*").order("created_at").limit(5000); out.action_comments = ae ? [] : ac ?? []; out.action_comments_error = ae ? ae.message : null; }
+      { const { data: ac, error: ae } = await todas(() => sb.from("action_comments").select("*"), [["created_at", true], ["id", true]]); out.action_comments = ae ? [] : ac ?? []; out.action_comments_error = ae ? ae.message : null; }
       { const { data: mm, error: me } = await sb.rpc("my_meetings"); out.my_meetings = me ? [] : mm ?? []; }
       // Quiénes son líderes (aunque no sean de mis grupos)
       try { const { data: lids } = await sb.rpc("lead_ids"); out.lead_ids = (lids ?? []).map((x) => (typeof x === "string" ? x : x.lead_ids ?? Object.values(x)[0])); } catch (_) { out.lead_ids = []; }
