@@ -8,7 +8,7 @@
 import { h } from "preact";
 import { useState, useEffect } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, getLang, srv, Empty, fmtDate, today, firstName, Avatar, ActionTable, NoteItem, MEETING_KIND, OPEN, isOverdue } from "./app.js";
+import { useApp, t, getLang, srv, Tx, TxCat, txAhora, Empty, fmtDate, today, firstName, Avatar, ActionTable, NoteItem, MEETING_KIND, OPEN, isOverdue } from "./app.js";
 import { BambooPersonBlock } from "./bamboo.js";
 import { IncidentRow, esMia, nuevas, vistoDesde, SevPill, esKudos, KudosPill } from "./incidencias.js";
 
@@ -73,26 +73,26 @@ export function MiEspacio() {
       <section class="mi-card">
         <div class="row between"><h2>${t("Mis pendientes")}</h2><${VerTodo} href="#/pendientes" /></div>
         ${abiertos.length ? html`<ul class="mi-mini">${abiertos.slice(0, 4).map((a) => html`<li key=${a.id} class=${isOverdue(a) ? "late" : ""}>
-            <span>${a.body}</span><span class="small muted">${a.due_date ? (isOverdue(a) ? t("Venció {d}", { d: fmtDate(a.due_date) }) : t("Para el {d}", { d: fmtDate(a.due_date) })) : t("Sin fecha")}</span></li>`)}</ul>
+            <span><${Tx} s=${a.body} /></span><span class="small muted">${a.due_date ? (isOverdue(a) ? t("Venció {d}", { d: fmtDate(a.due_date) }) : t("Para el {d}", { d: fmtDate(a.due_date) })) : t("Sin fecha")}</span></li>`)}</ul>
           ${abiertos.length > 4 && html`<p class="small muted">${t("y {n} más", { n: abiertos.length - 4 })}</p>`}`
           : html`<p class="muted small">${t("No tienes pendientes abiertos.")}</p>`}
       </section>
       <section class="mi-card">
         <div class="row between"><h2>${t("Incidencias y kudos")}${nuevasN > 0 && html` <span class="pill new-pill">${t("{n} nuevas", { n: nuevasN })}</span>`}</h2><${VerTodo} href="#/incidencias" /></div>
         ${incs.filter((i) => !i.voided).length ? html`<ul class="mi-mini">${incs.filter((i) => !i.voided).slice(0, 3).map((i) => html`<li key=${i.id} class=${esKudos(i) ? "kudos" : ""}>
-            <span>${esKudos(i) ? html`<${KudosPill} /> ` : ""}${t(i.category)} ${!esKudos(i) && html`<${SevPill} s=${i.severity} />`}</span><span class="small muted">${fmtDate(i.occurred_on)}${i.note || i.detail ? " · " + (i.note || srv(i.detail)) : ""}</span></li>`)}</ul>`
+            <span>${esKudos(i) ? html`<${KudosPill} /> ` : ""}<${TxCat} c=${i.category} /> ${!esKudos(i) && html`<${SevPill} s=${i.severity} />`}</span><span class="small muted">${fmtDate(i.occurred_on)}${i.note || i.detail ? " · " + (txAhora(i.note) || srv(i.detail)) : ""}</span></li>`)}</ul>`
           : html`<p class="muted small">${t("Sin registros todavía.")}</p>`}
       </section>
       <section class="mi-card">
         <div class="row between"><h2>${t("Última reunión")}</h2><${VerTodo} href="#/reuniones" /></div>
         ${ultima ? html`<p class="small"><b>${t(MEETING_KIND[ultima.kind] ?? "Reunión")} · ${fmtDate(ultima.meeting_date)}</b></p>
-            ${ultima.summary ? html`<p class="small clamp-3">${ultima.summary}</p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
+            ${ultima.summary ? html`<p class="small clamp-3"><${Tx} s=${ultima.summary} /></p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
             ${(ultima.acuerdos ?? []).length > 0 && html`<p class="small muted">${t("{h} de {n} acuerdos hechos", { n: ultima.acuerdos.length, h: ultima.acuerdos.filter((a) => a.status === "hecho").length })}</p>`}`
           : html`<p class="muted small">${t("Todavía no hay reuniones registradas.")}</p>`}
       </section>
       <section class="mi-card">
         <div class="row between"><h2>${t("Notas de tu líder")}</h2><${VerTodo} href="#/notas" /></div>
-        ${notas.length ? html`<ul class="mi-mini">${notas.slice(0, 2).map((i) => html`<li key=${i.id}><span class="clamp-3">${i.body}</span><span class="small muted">${fmtDate(String(i.created_at).slice(0, 10))}</span></li>`)}</ul>`
+        ${notas.length ? html`<ul class="mi-mini">${notas.slice(0, 2).map((i) => html`<li key=${i.id}><span class="clamp-3"><${Tx} s=${i.body} /></span><span class="small muted">${fmtDate(String(i.created_at).slice(0, 10))}</span></li>`)}</ul>`
           : html`<p class="muted small">${t("Tu líder todavía no compartió notas contigo.")}</p>`}
       </section>
     </div>
@@ -163,8 +163,8 @@ export function MisReuniones() {
     ${lista.length ? html`<ul class="mi-reus">${lista.map((m) => html`<li key=${m.id}>
         <div class="row between"><strong>${t(MEETING_KIND[m.kind] ?? "Reunión")} · ${fmtDate(m.meeting_date)}</strong>
           ${m.status !== "aplicado" && html`<span class="pill">${t("En revisión")}</span>`}</div>
-        ${m.summary ? html`<p class="small">${m.summary}</p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
-        ${(m.acuerdos ?? []).length > 0 && html`<div class="mi-acuerdos"><span class="lbl">${t("Acuerdos")}</span><ul>${m.acuerdos.map((a) => html`<li class=${a.status === "hecho" ? "done" : ""} key=${a.id}>${a.status === "hecho" ? "✓ " : ""}${a.body}${a.due_date ? html` <span class="muted small">· ${fmtDate(a.due_date)}</span>` : ""}</li>`)}</ul></div>`}
+        ${m.summary ? html`<p class="small"><${Tx} s=${m.summary} /></p>` : html`<p class="small muted">${t("El resumen aparece cuando tu líder termine de revisarla.")}</p>`}
+        ${(m.acuerdos ?? []).length > 0 && html`<div class="mi-acuerdos"><span class="lbl">${t("Acuerdos")}</span><ul>${m.acuerdos.map((a) => html`<li class=${a.status === "hecho" ? "done" : ""} key=${a.id}>${a.status === "hecho" ? "✓ " : ""}<${Tx} s=${a.body} />${a.due_date ? html` <span class="muted small">· ${fmtDate(a.due_date)}</span>` : ""}</li>`)}</ul></div>`}
       </li>`)}</ul>` : html`<${Empty}>${t("Todavía no hay reuniones registradas.")}<//>`}
   </section>`;
 }

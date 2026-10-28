@@ -2,7 +2,7 @@ import { h, render, createContext } from "preact";
 import { useState, useEffect, useContext, useMemo, useCallback } from "preact/hooks";
 import htm from "htm";
 import { EN } from "./i18n.js";
-import { deServidor } from "./traduce.js";
+import { deServidor, pareceEspanol } from "./traduce.js";
 import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
 import { HorasView, ReglasView, BambooPersonBlock, MisHoras, MiDesarrollo } from "./bamboo.js";
 import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe, esKudos } from "./incidencias.js";
@@ -22,6 +22,55 @@ try { LANG = localStorage.getItem(LANG_KEY) || "en"; } catch (_) {}
 export const getLang = () => LANG;
 /** Texto que viene del servidor (Bamboo, reglas, errores): en inglés si la app está en inglés. */
 export const srv = (s) => deServidor(s, LANG);
+
+// ---------------------------------------------------------------------
+// Cambio 24: texto libre en español → inglés con IA (una vez por texto; se guarda en el servidor y en el navegador).
+// El original no se toca: en ES se ve tal como se escribió.
+// ---------------------------------------------------------------------
+const TX_KEY = "tc-tx-v1";
+let txCache = new Map();
+try { txCache = new Map(JSON.parse(localStorage.getItem(TX_KEY) || "[]")); } catch (_) {}
+const txPend = new Set(), txFallo = new Set(), txSubs = new Set();
+let txTimer = null, txApi = null;
+export const setTxApi = (api) => { txApi = api?.fn && !api.demo ? api : null; };
+const txGuardar = () => { try { localStorage.setItem(TX_KEY, JSON.stringify([...txCache].slice(-1500))); } catch (_) {} };
+async function txEnviar() {
+  const lote = [...txPend].slice(0, 40);
+  lote.forEach((x) => txPend.delete(x));
+  if (!lote.length || !txApi) return;
+  try {
+    const r = await txApi.fn("translate", { texts: lote });
+    for (const [k, v] of Object.entries(r?.results ?? {})) if (typeof v === "string") txCache.set(k, v);
+    for (const x of lote) if (!txCache.has(x)) txFallo.add(x);
+    txGuardar();
+  } catch (_) { lote.forEach((x) => txFallo.add(x)); }
+  txSubs.forEach((f) => f());
+  if (txPend.size) txTimer = setTimeout(txEnviar, 60);
+}
+/** Traducción si ya la tengo; si no, la pide (y devuelve el original mientras tanto). Sin hooks: sirve en textos armados. */
+export function txAhora(s) {
+  if (LANG !== "en" || !s || typeof s !== "string") return s;
+  const k = s.slice(0, 3000);
+  const hit = txCache.get(k);
+  if (hit) return hit;
+  if (txApi && !txFallo.has(k) && !txPend.has(k) && pareceEspanol(k)) { txPend.add(k); clearTimeout(txTimer); txTimer = setTimeout(txEnviar, 180); }
+  return s;
+}
+export function useTx(s) {
+  const [, setN] = useState(0);
+  useEffect(() => { const f = () => setN((n) => n + 1); txSubs.add(f); return () => txSubs.delete(f); }, []);
+  return txAhora(s);
+}
+/** Muestra un texto libre traducido al inglés si la app está en inglés. */
+export const Tx = ({ s }) => useTx(s) ?? "";
+const sinTilde = (x) => String(x).toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").trim();
+const EN_NORM = new Map(Object.keys(EN).map((k) => [sinTilde(k), k]));
+/** Tema/categoría: diccionario (sin importar mayúsculas ni tildes) o, si no está, traducción con IA. */
+export const TxCat = ({ c }) => {
+  const k = c && (EN[c] ? c : EN_NORM.get(sinTilde(c)));
+  const v = useTx(k ? null : c);
+  return k ? t(k) : v ?? "";
+};
 export const t = (s, vars) => {
   let out = LANG === "en" ? EN[s] ?? s : s;
   if (vars) for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v);
@@ -430,7 +479,7 @@ function Comentarios({ a, autoFocus = false }) {
     ${lista.length > 0 && html`<ul class="com-list">${lista.map((c) => html`<li key=${c.id}>
       <span class="small"><b>${c.author_name ?? "—"}</b> <span class="muted">· ${fmtDate(String(c.created_at).slice(0, 10))}</span>
         ${(isAdmin || c.author_id === session.user.id) && html`<button class="icon com-del" aria-label=${t("Borrar comentario")} title=${t("Borrar comentario")} onClick=${() => borrar(c)}>✕</button>`}</span>
-      <p>${c.body}</p></li>`)}</ul>`}
+      <p><${Tx} s=${c.body} /></p></li>`)}</ul>`}
     <form class="row com-form" onSubmit=${enviar}>
       <input class="grow" value=${txt} onInput=${(e) => setTxt(e.target.value)} placeholder=${t("Escribe un comentario…")} aria-label=${t("Comentario")} autoFocus=${autoFocus} />
       <button disabled=${busy || !txt.trim()}>${t("Enviar")}</button>
@@ -444,7 +493,7 @@ function AlCompletar({ a, onClose }) {
   if (!a || data.action_comments_error) return null;
   return html`<${Modal} title=${t("Tarea completada")} onClose=${onClose}>
     <div class="stack">
-      <p class="muted small">“${a.body}”</p>
+      <p class="muted small">“<${Tx} s=${a.body} />”</p>
       <p>${t("¿Quieres dejar un comentario? Lo verán el líder y la persona.")}</p>
       <${Comentarios} a=${a} autoFocus=${true} />
       <div class="row end"><button class="primary" onClick=${onClose}>${t("Listo")}</button></div>
@@ -459,7 +508,7 @@ function ActionRow({ a }) {
   return html`<li class=${"action s-" + slug(a.status ?? "pendiente")}>
     <input type="checkbox" checked=${a.status === "hecho"} disabled=${!ops.canStatus(a)} onChange=${() => ops.toggle(a)} aria-label=${t("Marcar como hecho")} />
     <div class="action-body">
-      <span>${a.body}</span>
+      <span><${Tx} s=${a.body} /></span>
       <span class="action-meta small">
         <${PriorityPill} a=${a} />
         <span class="muted">${t("A cargo de")}: ${firstName(ownerName(idx, a))}</span>
@@ -489,7 +538,7 @@ export function ActionTable({ actions, empty, mine = false }) {
       return html`<div class=${"at-row s-" + slug(a.status ?? "pendiente") + (full ? "" : " ro")} role="row" key=${a.id}>
       <span class="at-task" role="cell">
         <input type="checkbox" checked=${a.status === "hecho"} disabled=${!st} onChange=${() => ops.toggle(a)} aria-label=${t("Marcar como hecho")} />
-        <span>${a.body}${a.private && html` <span class="cat">${t("privada")}</span>`}</span>
+        <span><${Tx} s=${a.body} />${a.private && html` <span class="cat">${t("privada")}</span>`}</span>
         <${ComentariosBtn} a=${a} open=${com === a.id} onToggle=${() => setCom(com === a.id ? null : a.id)} />
       </span>
       ${!mine && html`<span role="cell" data-label=${t("Sobre quién")}>${a.person_id ? html`<${PersonLink} id=${a.person_id} />` : html`<span class="muted">${t("General")}</span>`}</span>
@@ -536,16 +585,16 @@ function SuggestionCard({ s, compact }) {
   return html`<article class=${"sugg st-" + slug(s.status)}>
     <header onClick=${() => setOpen(!open)}>
       <div>
-        <h4>${s.title}</h4>
-        <span class="small muted">${s.category ? t(s.category) : ""}${src}</span>
+        <h4><${Tx} s=${s.title} /></h4>
+        <span class="small muted">${s.category ? html`<${TxCat} c=${s.category} />` : ""}${src}</span>
       </div>
       <span class=${"pill p-" + slug(s.status)}>${t(s.outcome ? s.outcome : s.status)}</span>
     </header>
     ${open && html`<div class="sugg-body">
-      ${s.why && html`<p><strong>${t("Por qué.")}</strong> ${s.why}</p>`}
-      ${s.how && html`<div class="how">${s.how.split("\n").filter(Boolean).map((l) => html`<p>${l}</p>`)}</div>`}
-      ${s.resources && html`<p class="small muted">${s.resources}</p>`}
-      ${updates.length > 0 && html`<ul class="updates">${updates.map((u) => html`<li><span class="small muted">${fmtDate(u.created_at)}</span> ${u.outcome && html`<b>${t(u.outcome)}</b>`} ${u.comment}</li>`)}</ul>`}
+      ${s.why && html`<p><strong>${t("Por qué.")}</strong> <${Tx} s=${s.why} /></p>`}
+      ${s.how && html`<div class="how">${s.how.split("\n").filter(Boolean).map((l) => html`<p><${Tx} s=${l} /></p>`)}</div>`}
+      ${s.resources && html`<p class="small muted"><${Tx} s=${s.resources} /></p>`}
+      ${updates.length > 0 && html`<ul class="updates">${updates.map((u) => html`<li><span class="small muted">${fmtDate(u.created_at)}</span> ${u.outcome && html`<b>${t(u.outcome)}</b>`} <${Tx} s=${u.comment} /></li>`)}</ul>`}
       <div class="sugg-actions">
         ${isAdmin && s.status === "propuesta" && html`
           <button class="primary" disabled=${busy} onClick=${() => set({ status: "validada" })}>${t("Validar y compartir")}</button>
@@ -561,6 +610,44 @@ function SuggestionCard({ s, compact }) {
       </div>
     </div>`}
   </article>`;
+}
+
+// Cambio 24: agregar una tarea desde el perfil, sin reunión (Gus: a cualquiera; líder: a su gente)
+function AddTask({ person, onClose }) {
+  const { api, reload, isAdmin, idx, me } = useApp();
+  const [body, setBody] = useState("");
+  const [owner, setOwner] = useState(person.id);
+  const [due, setDue] = useState("");
+  const [prio, setPrio] = useState("media");
+  const [priv, setPriv] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const yo = me?.person_id ?? null;
+  const save = async (e) => {
+    e.preventDefault();
+    if (!body.trim()) return toast(t("Escribe la tarea."), "bad");
+    setBusy(true);
+    try {
+      await api.insert("actions", [{ person_id: person.id, owner_id: owner === "gus" ? null : owner, body: body.trim(), due_date: due || null, priority: prio, private: isAdmin && priv }]);
+      toast(t("Tarea agregada")); reload(); onClose();
+    } catch (x) { toast(x.message, "bad"); }
+    setBusy(false);
+  };
+  const opciones = [[person.id, person.full_name], ...(yo && yo !== person.id ? [[yo, t("Yo ({n})", { n: firstName(idx.person(yo)?.full_name ?? "") })]] : []), ["gus", "Gus"]]
+    .filter(([v], i, arr) => arr.findIndex(([w]) => w === v) === i);
+  return html`<${Modal} title=${t("Tarea para {n}", { n: firstName(person.full_name) })} onClose=${onClose}>
+    <form class="stack" onSubmit=${save}>
+      <label>${t("Tarea")}<input autoFocus value=${body} onInput=${(e) => setBody(e.target.value)} placeholder=${t("Ej.: preparar la demo del checklist para el viernes")} /></label>
+      <div class="row">
+        <label class="grow">${t("A cargo de")}<select value=${owner} onChange=${(e) => setOwner(e.target.value)}>${opciones.map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select></label>
+        <label>${t("Fecha límite")}<input type="date" value=${due} onInput=${(e) => setDue(e.target.value)} /></label>
+      </div>
+      <div><span class="lbl">${t("Prioridad")}</span>
+        <div class="seg">${PRIORITIES.map((x) => html`<button type="button" class=${prio === x ? "on" : ""} aria-pressed=${prio === x} onClick=${() => setPrio(x)}>${t(x)}</button>`)}</div></div>
+      ${isAdmin && html`<label class="check"><input type="checkbox" checked=${priv} onChange=${(e) => setPriv(e.target.checked)} /> ${t("Solo para mí (el lead no la ve)")}</label>`}
+      <p class="small muted">${owner === person.id ? t("{n} la verá en Mis pendientes y podrá marcarla y comentarla.", { n: firstName(person.full_name) }) : t("Queda en el perfil de {n} y en tus pendientes.", { n: firstName(person.full_name) })}</p>
+      <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Agregar tarea")}</button></div>
+    </form>
+  <//>`;
 }
 
 function AddNote({ person, onClose }) {
@@ -627,9 +714,9 @@ function Visibilidad({ i }) {
 export function NoteItem({ i, showCat = true }) {
   const ctx = useApp();
   const [edit, setEdit] = useState(false);
-  return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat">${t(i.category)}</span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}<${Visibilidad} i=${i} />
+  return html`<div class="tl-item"><${Kind} kind=${i.kind} />${showCat && i.category && html`<span class="cat"><${TxCat} c=${i.category} /></span>`}${i.private && html`<span class="cat">${t("privada")}</span>`}<${Visibilidad} i=${i} />
     ${canEditNote(ctx, i) && html`<button class="icon note-edit" title=${t("Editar nota")} aria-label=${t("Editar nota")} onClick=${() => setEdit(true)}>✎</button>`}
-    <p>${i.body}</p>
+    <p><${Tx} s=${i.body} /></p>
     ${i.edited_at && html`<p class="small muted note-edited">${t("Editada por {p}, {d}", { p: i.edited_by_name ?? "—", d: fmtDate(String(i.edited_at).slice(0, 10)) })}</p>`}
     ${edit && html`<${EditNote} note=${i} onClose=${() => setEdit(false)} />`}
   </div>`;
@@ -768,7 +855,7 @@ function PrepContent({ person, history, onGenerated }) {
     generar();
   };
   const lista = sel && !previas.some((g) => g.id === sel.id) ? [sel, ...previas] : previas;
-  const List = ({ title, items }) => items?.length ? html`<section><h3>${title}</h3><ul>${items.map((i) => html`<li>${i}</li>`)}</ul></section>` : null;
+  const List = ({ title, items }) => items?.length ? html`<section><h3>${title}</h3><ul>${items.map((i) => html`<li><${Tx} s=${i} /></li>`)}</ul></section>` : null;
   const hayDetalle = prep && [prep.last_time, prep.open_items, prep.what_worked, prep.what_didnt, prep.people].some((x) => x?.length);
   return html`<div class="prep-wrap">
     ${sel && !busy && html`<div class="ai-bar">
@@ -780,9 +867,9 @@ function PrepContent({ person, history, onGenerated }) {
       </span>
     </div>`}
     ${err ? html`<p class="error">${err}</p>` : busy || !prep ? html`<${Busy} label=${t("La IA está revisando el historial…")} />` : html`<div class="prep">
-      <p class="lede">${prep.headline}</p>
-      ${prep.summary?.length > 0 && html`<section class="prep-sum"><h3>${t("Resumen")}</h3><ul>${prep.summary.map((x) => html`<li>${x}</li>`)}</ul></section>`}
-      ${prep.suggested_points?.length > 0 && html`<section><h3>${t("Puntos para la reunión")}</h3>${prep.suggested_points.map((s) => html`<div class="point"><strong>${s.topic}</strong>${s.why && html`<p class="muted">${s.why}</p>`}<p class="quote">“${s.how_to_open}”</p></div>`)}</section>`}
+      <p class="lede"><${Tx} s=${prep.headline} /></p>
+      ${prep.summary?.length > 0 && html`<section class="prep-sum"><h3>${t("Resumen")}</h3><ul>${prep.summary.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ul></section>`}
+      ${prep.suggested_points?.length > 0 && html`<section><h3>${t("Puntos para la reunión")}</h3>${prep.suggested_points.map((s) => html`<div class="point"><strong><${Tx} s=${s.topic} /></strong>${s.why && html`<p class="muted"><${Tx} s=${s.why} /></p>`}<p class="quote">“<${Tx} s=${s.how_to_open} />”</p></div>`)}</section>`}
       <${List} title=${t("Preguntas clave")} items=${prep.questions} />
       ${hayDetalle && html`<details class="prep-more" open=${!prep.summary?.length}><summary>${t("Ver detalle")}</summary>
         <div class="prep-grid">
@@ -791,7 +878,7 @@ function PrepContent({ person, history, onGenerated }) {
           <${List} title=${t("Lo que funcionó")} items=${prep.what_worked} />
           <${List} title=${t("Lo que no funcionó")} items=${prep.what_didnt} />
         </div>
-        ${prep.people?.length > 0 && html`<section><h3>${t("Su gente")}</h3><table class="tbl"><tbody>${prep.people.map((p) => html`<tr><td><strong>${p.name}</strong></td><td>${p.status}</td><td class="muted">${p.focus}</td></tr>`)}</tbody></table></section>`}
+        ${prep.people?.length > 0 && html`<section><h3>${t("Su gente")}</h3><table class="tbl"><tbody>${prep.people.map((p) => html`<tr><td><strong>${p.name}</strong></td><td><${Tx} s=${p.status} /></td><td class="muted"><${Tx} s=${p.focus} /></td></tr>`)}</tbody></table></section>`}
       </details>`}
     </div>`}
   </div>`;
@@ -882,13 +969,13 @@ function PersonView({ id }) {
       <div class="grow">
         <h1>${p.full_name}${p.nickname ? html` <span class="nick">${p.nickname}</span>` : ""}</h1>
         <p class="muted">${[p.title, g?.name].filter(Boolean).join(", ")}${p.status !== "activo" ? ` (${t(p.status)})` : ""}</p>
-        ${p.focus && html`<p class="small">${p.focus}</p>`}
+        ${p.focus && html`<p class="small"><${Tx} s=${p.focus} /></p>`}
         ${p.notes && isAdmin && html`<p class="small muted">${p.notes}</p>`}
       </div>
       <div class="head-actions">
         <button class="primary" onClick=${() => go("#/preparar/" + p.id)}>${t("Preparar reunión")}</button>
         ${(() => { const u = (aiHist ?? []).find((g) => g.kind === "prep"); return u ? html`<span class="small muted ai-last" title=${t("Generado con IA por {p} · {d}", { p: u.created_by_name ?? "—", d: fmtCuando(u.created_at) })}>${t("Última: {d} · {p}", { d: fmtDate(String(u.created_at).slice(0, 10)), p: firstName(u.created_by_name ?? "") })}</span>` : null; })()}
-        ${(isAdmin || (!isMe && !idx.isLead(p.id))) && html`<button onClick=${() => setModal("note")}>${t("Agregar nota")}</button>`}
+        ${(isAdmin || (!isMe && !idx.isLead(p.id))) && html`<button onClick=${() => setModal("note")}>${t("Agregar nota")}</button><button onClick=${() => setModal("task")}>${t("Agregar tarea")}</button>`}
         ${isAdmin && html`<button onClick=${() => setModal("ideas")}>${t("Ideas con IA")}</button>`}
         ${isAdmin && html`<button class="icon" title=${t("Editar")} aria-label=${t("Editar persona")} onClick=${() => setModal("edit")}>✎</button>`}
       </div>
@@ -916,7 +1003,7 @@ function PersonView({ id }) {
         <ol class="timeline">
           ${byMeeting.map((b) => html`<li key=${b.key}>
             <div class="tl-date">${b.meeting ? html`<a href=${"#/reunion/" + b.meeting.id}>${t(MEETING_KIND[b.meeting.kind])} ${fmtDate(b.meeting.meeting_date)}</a>` : fmtDate(b.date)}</div>
-            ${b.summary && html`<p class="tl-sum">${b.summary}</p>`}
+            ${b.summary && html`<p class="tl-sum"><${Tx} s=${b.summary} /></p>`}
             ${b.items.map((i) => html`<${NoteItem} i=${i} key=${i.id} />`)}
           </li>`)}
         </ol>
@@ -924,7 +1011,7 @@ function PersonView({ id }) {
 
       <section class="col">
         <h2>${t("Ahora")}</h2>
-        <h3>${t("Pendientes")}</h3>
+        <div class="row between"><h3>${t("Pendientes")}</h3>${(isAdmin || (!isMe && !idx.isLead(p.id))) && html`<button class="small-btn" onClick=${() => setModal("task")}>+ ${t("Tarea")}</button>`}</div>
         ${open.length ? html`<ul class="actions">${open.map((a) => html`<${ActionRow} a=${a} key=${a.id} />`)}</ul>` : html`<${Empty}>${t("Sin pendientes abiertos.")}<//>`}
         <h3 class="mt">${t("Métodos en uso")}</h3>
         ${inUse.length ? inUse.map((x) => html`<${SuggestionCard} s=${x} key=${x.id} />`) : html`<${Empty}>${t("Ningún método en uso todavía.")}<//>`}
@@ -941,6 +1028,7 @@ function PersonView({ id }) {
     </div>
 
     ${modal === "note" && html`<${AddNote} person=${p} onClose=${() => setModal(null)} />`}
+    ${modal === "task" && html`<${AddTask} person=${p} onClose=${() => setModal(null)} />`}
     ${modal === "ideas" && html`<${IdeasModal} person=${p} history=${aiHist} onClose=${() => setModal(null)} />`}
     ${modal === "edit" && html`<${EditPerson} person=${p} onClose=${() => setModal(null)} />`}
     ${modal === "add" && html`<${AddToGroup} lead=${p} onClose=${() => setModal(null)} />`}
@@ -960,12 +1048,12 @@ function CoachCard({ c, onDecide, busy }) {
       <span class="for">${t("Para")}: ${c.for_person}</span>
       ${d && html`<span class=${"pill " + (d === "me sirve" ? "p-aplicado" : "")}>${t(d)}</span>`}
     </header>
-    <h3>${c.title}</h3>
-    ${c.why && html`<p class="why">${c.why}</p>`}
+    <h3><${Tx} s=${c.title} /></h3>
+    ${c.why && html`<p class="why"><${Tx} s=${c.why} /></p>`}
     ${c.steps?.length > 0 && html`<ol class="steps">${c.steps.map((x) => html`<li>${x}</li>`)}</ol>`}
-    ${c.first_step && html`<p class="first"><strong>${t("Esta semana")}:</strong> ${c.first_step}</p>`}
-    ${c.say_it && html`<p class="quote">“${c.say_it}”</p>`}
-    ${c.measure && html`<p class="small muted"><strong>${t("Cómo saber si funcionó")}:</strong> ${c.measure}</p>`}
+    ${c.first_step && html`<p class="first"><strong>${t("Esta semana")}:</strong> <${Tx} s=${c.first_step} /></p>`}
+    ${c.say_it && html`<p class="quote">“<${Tx} s=${c.say_it} />”</p>`}
+    ${c.measure && html`<p class="small muted"><strong>${t("Cómo saber si funcionó")}:</strong> <${Tx} s=${c.measure} /></p>`}
     ${onDecide && html`<div class="seg decide" role="group" aria-label=${t("¿Te sirve?")}>
       <button class=${d === "me sirve" ? "on" : ""} disabled=${busy} onClick=${() => onDecide(d === "me sirve" ? null : "me sirve")}>${t("Me sirve")}</button>
       <button class=${d === "no me sirve" ? "on" : ""} disabled=${busy} onClick=${() => onDecide(d === "no me sirve" ? null : "no me sirve")}>${t("No me sirve")}</button>
@@ -1047,11 +1135,11 @@ function MeetingView({ id }) {
       <button class="link" onClick=${del}>${t("Borrar")}</button>
     </div>`}</header>
 
-    ${m.summary && html`<p class="lede">${m.summary}</p>`}
+    ${m.summary && html`<p class="lede"><${Tx} s=${m.summary} /></p>`}
     ${an && html`<div class="prep-grid">
-      ${an.topics?.length > 0 && html`<section><h3>${t("Temas")}</h3><ul>${an.topics.map((x) => html`<li>${x}</li>`)}</ul></section>`}
-      ${an.next_meeting_topics?.length > 0 && html`<section><h3>${t("Para la próxima")}</h3><ul>${an.next_meeting_topics.map((x) => html`<li>${x}</li>`)}</ul></section>`}
-      ${an.risks?.length > 0 && html`<section class="risk"><h3>${t("Alertas")}</h3><ul>${an.risks.map((x) => html`<li>${x}</li>`)}</ul></section>`}
+      ${an.topics?.length > 0 && html`<section><h3>${t("Temas")}</h3><ul>${an.topics.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ul></section>`}
+      ${an.next_meeting_topics?.length > 0 && html`<section><h3>${t("Para la próxima")}</h3><ul>${an.next_meeting_topics.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ul></section>`}
+      ${an.risks?.length > 0 && html`<section class="risk"><h3>${t("Alertas")}</h3><ul>${an.risks.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ul></section>`}
     </div>`}
 
     ${acts.length > 0 && html`<section class="block"><h2>${t("Siguientes pasos")}</h2><${ActionTable} actions=${acts} /></section>`}
@@ -1530,21 +1618,21 @@ function IdeaCard({ idea }) {
     <header onClick=${() => setOpen(!open)}>
       <div class="grow">
         <span class=${"pill " + (idea.kind === "problema" ? "p-prob" : "p-idea")}>${idea.kind === "problema" ? t("Problema") : t("Idea")}</span>
-        <h4>${idea.title}</h4>
+        <h4><${Tx} s=${idea.title} /></h4>
         <span class="small muted">${[g?.name, idea.author_name, t(HORIZON[idea.horizon]), fmtDate(idea.created_at)].filter(Boolean).join(", ")}</span>
       </div>
       <span class=${"pill st-i-" + slug(idea.status)}>${t(idea.status)}</span>
     </header>
     ${open && html`<div class="idea-body">
-      ${idea.description && html`<p>${idea.description}</p>`}
+      ${idea.description && html`<p><${Tx} s=${idea.description} /></p>`}
       ${idea.raised_by && html`<p class="small muted">${t("Lo planteó")}: ${idea.raised_by}</p>`}
       ${busy ? html`<${Busy} label=${t("La IA está buscando soluciones…")} />` : sol && html`<div class="sol">
         <p class="lede">${sol.diagnosis}</p>
         ${sol.quick_win && html`<p class="quick"><strong>${t("Esta semana")}:</strong> ${sol.quick_win}</p>`}
         <div class="opts">${(sol.options ?? []).map((o) => html`<div class="opt">
-          <strong>${o.title}</strong>
+          <strong><${Tx} s=${o.title} /></strong>
           <span class="small muted">${t("Esfuerzo")}: ${t(o.effort)}, ${t("impacto")}: ${t(o.impact)}, ${t(HORIZON[o.horizon] ?? o.horizon)}</span>
-          <p>${o.description}</p>
+          <p><${Tx} s=${o.description} /></p>
           ${o.steps?.length > 0 && html`<ol>${o.steps.map((s) => html`<li>${s}</li>`)}</ol>`}
         </div>`)}</div>
         ${sol.questions?.length > 0 && html`<p class="small"><strong>${t("Falta saber")}:</strong> ${sol.questions.join(" / ")}</p>`}
@@ -1726,18 +1814,18 @@ export function campana(ctx) {
   const kud = todasNuevas.filter(esKudos);
   if (kud.length) grupos.push({ k: "kud", href: "#/incidencias", titulo: t("Kudos nuevos"),
     items: kud.map((i) => ({ id: "k" + i.id, kudos: true, meta: (esMia(ctx, i) && !isAdmin ? t("Para ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on) + " · " + t("de {p}", { p: srv(i.created_by_name) ?? "—" }),
-      txt: t(i.category) + (i.note ? " — " + i.note : ""), when: new Date(i.created_at).getTime() })) });
+      txt: t(i.category) + (i.note ? " — " + txAhora(i.note) : ""), when: new Date(i.created_at).getTime() })) });
   const incs = todasNuevas.filter((i) => !esKudos(i));
   if (incs.length) grupos.push({ k: "inc", href: "#/incidencias", titulo: t("Incidencias nuevas"),
     items: incs.map((i) => ({ id: "i" + i.id, meta: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on),
-      txt: t(i.category) + (i.note || i.detail ? " — " + (i.note || srv(i.detail)) : ""), when: new Date(i.created_at).getTime() })) });
+      txt: t(i.category) + (i.note || i.detail ? " — " + (txAhora(i.note) || srv(i.detail)) : ""), when: new Date(i.created_at).getTime() })) });
   // 2) Mis pendientes vencidos o que vencen en 2 días
   const mio = (a) => (me?.person_id ? a.owner_id === me.person_id : false) || (isAdmin && !a.owner_id);
   const pend = data.actions.filter((a) => OPEN.includes(a.status) && a.due_date && mio(a) && daysUntil(a.due_date) <= 2)
     .sort((a, b) => a.due_date.localeCompare(b.due_date));
   if (pend.length) grupos.push({ k: "pend", href: "#/pendientes", titulo: t("Mis pendientes"),
     items: pend.map((a) => { const d = daysUntil(a.due_date);
-      return { id: "a" + a.id + (d < 0 ? "v" : "p"), late: d < 0, txt: a.body,
+      return { id: "a" + a.id + (d < 0 ? "v" : "p"), late: d < 0, txt: txAhora(a.body),
         meta: (d < 0 ? t("Vencido") + " · " + fmtDate(a.due_date) : d === 0 ? t("Vence hoy") : d === 1 ? t("Vence mañana") : t("Vence en {n} días", { n: d })) + (a.person_id && a.person_id !== me?.person_id && idx.person(a.person_id) ? " · " + idx.person(a.person_id).full_name : ""),
         when: d < 0 ? tsDia(a.due_date) + MS_DIA : tsDia(a.due_date) - 2 * MS_DIA }; }) });
   // 3) Reuniones por revisar
@@ -1855,6 +1943,7 @@ function Shell({ api, session, onLang }) {
     setSeen([...seenRows.filter((x) => x.kind !== kind), { kind, seen_at: new Date().toISOString() }]);
     api.markSeen(kind).catch(() => {});
   };
+  setTxApi(api);
   const ctx = { api, data, reload, idx, me: profile, isAdmin, isMember, session, reviewsPending, bamboo, reloadBamboo, seen: seenRows, markSeen, alCompletar: setHecha };
   const incNuevas = data.incidents_error ? 0 : nuevas(ctx).length;
   const setLang = async (l) => { onLang(l); try { await api.rpc("set_lang", { l }); } catch (_) {} };

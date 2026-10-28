@@ -11,6 +11,7 @@
 //    reset_password (admin)  → cambia la contraseña de un colaborador
 //    create_users   (admin)  → crea en lote los logins del equipo (rol "member", deben cambiar la contraseña al entrar)
 //    set_access     (admin)  → desactiva o reactiva el login de alguien (por ejemplo, cuando sale de la empresa)
+//    translate      (todos)  → traduce al inglés textos que el usuario ya ve (con caché; no cambia el original)
 //  Las personas del equipo (rol "member") no pueden usar ninguna acción de esta función.
 //  Secretos (Edge Functions → Secrets):
 //    ANTHROPIC_API_KEY   (obligatorio)
@@ -51,17 +52,17 @@ Reglas:
 
 // Cambio 22: toda la salida de la IA en inglés, aunque las notas o la transcripción estén en español
 const langRule = (_lang?: string) =>
-  "OUTPUT LANGUAGE: English, always — even when the notes, comments or transcript are in Spanish. Translate names of topics and actions into natural English. Keep enum values (kind, owner, priority, outcome, status) exactly as defined in the schema; never translate them.";
+  "OUTPUT LANGUAGE: English, always — even when the notes, comments or transcript are in Spanish. Translate names of topics and actions into natural English. Keep enum values (kind, owner, priority, outcome, status, category) exactly as defined in the schema; never translate them.";
 
 // ---------------------------------------------------------------------
-async function callClaude(system: string, user: string, tool: Record<string, unknown>, maxTokens = 8000) {
+async function callClaude(system: string, user: string, tool: Record<string, unknown>, maxTokens = 8000, model = MODEL) {
   const key = Deno.env.get("ANTHROPIC_API_KEY");
   if (!key) throw new Error("Falta el secreto ANTHROPIC_API_KEY en Supabase (Edge Functions → Secrets).");
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "x-api-key": key, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
-      model: MODEL,
+      model,
       max_tokens: maxTokens,
       system: system + `\n\nResponde ÚNICAMENTE llamando a la herramienta "${tool.name}", sin texto adicional.`,
       tools: [tool],
@@ -565,6 +566,43 @@ async function notify(admin: DB, reviewId: string, userId: string) {
   return { emailed: true };
 }
 
+// Cambio 24: traducción al inglés con caché (tabla translations, solo con la clave de servicio)
+async function sha256(s: string) {
+  const b = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
+  return [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
+}
+async function traducir(admin: any, textos: string[]) {
+  const lista = [...new Set(textos.filter((x) => typeof x === "string").map((x) => x.slice(0, 3000)).filter((x) => x.trim()))].slice(0, 60);
+  if (!lista.length) return {};
+  const hashes = await Promise.all(lista.map((x) => sha256("en|" + x)));
+  const { data: hechas } = await admin.from("translations").select("hash,result").in("hash", hashes);
+  const porHash = new Map((hechas ?? []).map((r: any) => [r.hash, r.result]));
+  const faltan = lista.map((x, i) => ({ x, h: hashes[i] })).filter((o) => !porHash.has(o.h));
+  if (faltan.length) {
+    const tool = {
+      name: "traducciones",
+      description: "Traducciones al inglés, en el mismo orden.",
+      input_schema: { type: "object", properties: { items: { type: "array", items: { type: "string" } } }, required: ["items"] },
+    };
+    const user = `Translate each item into natural, professional English for a workplace coaching tool. Rules:
+- Keep the same order and the same number of items (${faltan.length}).
+- Keep people's names, product names (WOMS, Salesforce, SFX, PowerApps, Bamboo), numbers and dates; write dates like "Oct 5".
+- If an item is already in English, return it unchanged. Do not add explanations, quotes or notes.
+- Short labels (a topic of one to three words) stay short labels, lowercase like the original.
+
+ITEMS (JSON):
+${JSON.stringify(faltan.map((o) => o.x))}`;
+    const r: any = await callClaude("You are a precise translator from Spanish to English.", user, tool, 4000, Deno.env.get("TRANSLATE_MODEL") ?? "claude-haiku-5-5");
+    const out: string[] = Array.isArray(r?.items) ? r.items : [];
+    const filas = faltan.map((o, i) => ({ hash: o.h, lang: "en", source: o.x, result: typeof out[i] === "string" && out[i].trim() ? out[i] : o.x }));
+    for (const f of filas) porHash.set(f.hash, f.result);
+    if (out.length === faltan.length) await admin.from("translations").upsert(filas).then(() => {}, () => {});
+  }
+  const res: Record<string, string> = {};
+  lista.forEach((x, i) => { res[x] = porHash.get(hashes[i]) as string; });
+  return res;
+}
+
 // Historial de IA (Cambio 17): guarda lo generado con quién y cuándo. Si la tabla no existe, no falla.
 async function guardarIA(admin: any, who: Who, personId: string, kind: string, result: unknown, lang?: string) {
   try {
@@ -630,10 +668,12 @@ Deno.serve(async (req) => {
     const { data: me } = await db.from("profiles").select("*").eq("id", user.id).single();
     const isAdmin = me?.role === "admin";
     if (me?.disabled) return json({ error: "Tu acceso está desactivado." }, 403);
-    if (me?.role === "member") return json({ error: "Esta función es solo para líderes." }, 403);
-
     const body = await req.json().catch(() => ({}));
     const action = body.action as string;
+    const admin0 = createClient(SUPABASE_URL, SERVICE_KEY);
+    // Traducir lo que ya se ve en pantalla: disponible para todos (también las personas del equipo)
+    if (action === "translate") return json({ results: await traducir(admin0, Array.isArray(body.texts) ? body.texts : []) });
+    if (me?.role === "member") return json({ error: "Esta función es solo para líderes." }, 403);
 
     const admin = createClient(SUPABASE_URL, SERVICE_KEY);
 

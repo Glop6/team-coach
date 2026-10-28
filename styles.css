@@ -840,3 +840,4 @@ button.primary.kudos-btn { background: var(--kudos); color: #fff; border-color: 
   .periodo-bar .seg button { border: 1px solid var(--line) !important; border-radius: 999px; }
   .inc-page .page-head .row { flex-wrap: wrap; }
 }
+button.small-btn { padding: 0.2rem 0.7rem; font-size: 0.82rem; }

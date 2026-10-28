@@ -9,7 +9,7 @@
 import { h } from "preact";
 import { useState, useEffect, useRef } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName, srv, getLang } from "./app.js";
+import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName, srv, getLang, useTx, txAhora, TxCat } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -163,23 +163,25 @@ export function IncidentRow({ inc, showPerson = true, nueva = false }) {
   const puedeReactivar = ctx.isAdmin || (!!inc.voided_by && inc.voided_by === ctx.session?.user?.id);
   const historial = Array.isArray(inc.history) ? inc.history : [];
   const kd = esKudos(inc);
+  const nota = useTx(inc.note);
+  const motivo = useTx(inc.void_reason);
   return html`<li class=${"inc" + (kd ? " kudos" : "") + (inc.voided ? " voided" : "") + (nueva ? " is-new" : "")}>
     <div class="inc-main">
       ${nueva && html`<span class="pill new-pill">${t("Nueva")}</span>`}
       <span class="small muted nowrap">${fmtDate(inc.occurred_on)}</span>
       ${showPerson && html`<strong>${inc.person_id ? html`<${PersonLink} id=${inc.person_id} />` : nombreDe(ctx, inc)}</strong>`}
-      ${kd ? html`<${KudosPill} />` : ""}<span class="pill">${t(inc.category)}</span>${!kd && html`<${SevPill} s=${inc.severity} />`}
+      ${kd ? html`<${KudosPill} />` : ""}<span class="pill"><${TxCat} c=${inc.category} /></span>${!kd && html`<${SevPill} s=${inc.severity} />`}
       ${auto ? html`<span class="small muted">${t("Automática (Bamboo)")}</span>` : html`<span class="small muted">${t("por {p}", { p: inc.created_by_name ?? "—" })}</span>`}
     </div>
-    ${(inc.detail || inc.note) && html`<p class="small">${srv(inc.detail) || ""}${inc.detail && inc.note ? " · " : ""}${inc.note || ""}</p>`}
-    ${inc.voided && html`<p class="small inc-void">${t("Anulada por {p} ({d}): {m}", { p: inc.voided_by_name ?? "—", d: fechaHora(inc.voided_at), m: inc.void_reason })}</p>`}
+    ${(inc.detail || inc.note) && html`<p class="small">${srv(inc.detail) || ""}${inc.detail && inc.note ? " · " : ""}${nota || ""}</p>`}
+    ${inc.voided && html`<p class="small inc-void">${t("Anulada por {p} ({d}): {m}", { p: inc.voided_by_name ?? "—", d: fechaHora(inc.voided_at), m: motivo })}</p>`}
     ${(!mia || historial.length > 0) && html`<div class="inc-acts">
       ${!mia && (inc.voided
         ? puedeReactivar && html`<button class="link small" onClick=${() => reactivar(ctx, inc)}>${t("Reactivar")}</button>`
         : html`<button class="link small late-t" onClick=${() => setAnular(true)}>${t("Anular")}</button>`)}
       ${historial.length > 0 && html`<button class="link small" aria-expanded=${hist} onClick=${() => setHist(!hist)}>${t("Historial ({n})", { n: historial.length })}</button>`}
     </div>`}
-    ${hist && html`<ol class="inc-hist small muted">${historial.map((h) => html`<li>${fechaHora(h.cuando)} · ${h.accion === "anulada" ? t("Anulada por {p}: {m}", { p: h.por ?? "—", m: h.motivo ?? "" }) : t("Reactivada por {p}", { p: h.por ?? "—" })}</li>`)}</ol>`}
+    ${hist && html`<ol class="inc-hist small muted">${historial.map((h) => html`<li>${fechaHora(h.cuando)} · ${h.accion === "anulada" ? t("Anulada por {p}: {m}", { p: h.por ?? "—", m: txAhora(h.motivo) ?? "" }) : t("Reactivada por {p}", { p: h.por ?? "—" })}</li>`)}</ol>`}
     ${anular && html`<${Anular} inc=${inc} onClose=${() => setAnular(false)} />`}
   </li>`;
 }

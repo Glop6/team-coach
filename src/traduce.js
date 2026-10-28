@@ -124,3 +124,21 @@ export function deServidor(s, lang) {
   for (const [re, fn] of REGLAS) out = out.replace(re, fn);
   return fechasEn(out);
 }
+
+// ---------------------------------------------------------------------
+// Cambio 24: ¿el texto está en español? (para pedir su traducción solo cuando hace falta)
+// ---------------------------------------------------------------------
+const PAL_ES = new Set(("de la el que en los las con para por del se una un es su al lo como más pero sus le ya fue este ha porque esta entre cuando muy sin sobre también " +
+  "hasta hay donde quien desde todo nos durante todos uno les ni otros ese eso ante ellos esto antes algunos qué unos otro otras otra tanto esa estos mucho " +
+  "nada muchos cual poco ella estar estas algunas algo hizo hace tiene debe puede bien mejor equipo cliente caso casos semana día días mes reunión tarea " +
+  "pendiente revisar hablar avisar entrega trabajo registro horas aplicó acordamos falta faltan nota privada").split(" "));
+export function pareceEspanol(s) {
+  if (!s || typeof s !== "string") return false;
+  const txt = s.toLowerCase();
+  if (/[áéíóúñ¿¡]/.test(txt)) return true;
+  const pals = txt.match(/[a-záéíóúñü]+/g) ?? [];
+  if (!pals.length) return false;
+  const n = pals.filter((w) => PAL_ES.has(w)).length;
+  if (pals.length <= 6) return n >= 1 || pals.some((w) => /(ción|ciones|dad|dades|mente|ismo|ivo|iva|ado|ada|ido|ida)$/.test(w));
+  return n >= 2 && n / pals.length >= 0.15;
+}
