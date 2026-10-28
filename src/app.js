@@ -2,9 +2,10 @@ import { h, render, createContext } from "preact";
 import { useState, useEffect, useContext, useMemo, useCallback } from "preact/hooks";
 import htm from "htm";
 import { EN } from "./i18n.js";
+import { deServidor } from "./traduce.js";
 import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
 import { HorasView, ReglasView, BambooPersonBlock, MisHoras, MiDesarrollo } from "./bamboo.js";
-import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe } from "./incidencias.js";
+import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe, esKudos } from "./incidencias.js";
 import { MiEspacio, MisIncidencias, MisReuniones, MisPendientes, MisNotas } from "./persona.js";
 
 const html = htm.bind(h);
@@ -14,9 +15,13 @@ export const useApp = () => useContext(Ctx);
 // ---------------------------------------------------------------------
 // Idioma (Cambio 6). Las claves son el texto en español.
 // ---------------------------------------------------------------------
-let LANG = "es";
-try { LANG = localStorage.getItem("tc-lang") || "es"; } catch (_) {}
+// Cambio 22: inglés por defecto para todos (la clave nueva ignora la elección guardada antes del cambio)
+const LANG_KEY = "tc-lang2";
+let LANG = "en";
+try { LANG = localStorage.getItem(LANG_KEY) || "en"; } catch (_) {}
 export const getLang = () => LANG;
+/** Texto que viene del servidor (Bamboo, reglas, errores): en inglés si la app está en inglés. */
+export const srv = (s) => deServidor(s, LANG);
 export const t = (s, vars) => {
   let out = LANG === "en" ? EN[s] ?? s : s;
   if (vars) for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v);
@@ -89,7 +94,7 @@ function Toasts() {
     ${items.map((x) => html`<div class=${"toast " + x.kind} key=${x.id}>${x.text}</div>`)}
   </div>`;
 }
-export const toast = (x, k) => pushToast(x, k);
+export const toast = (x, k) => pushToast(k === "bad" ? srv(x) : x, k);
 
 // Índices y reglas sobre los datos
 function buildIdx(data) {
@@ -231,8 +236,8 @@ function ThemeSwitch() {
 
 function LangSwitch({ onLang }) {
   return html`<span class="seg lang" role="group" aria-label="Idioma / Language">
-    <button type="button" class=${LANG === "es" ? "on" : ""} onClick=${() => onLang("es")}>Español</button>
-    <button type="button" class=${LANG === "en" ? "on" : ""} onClick=${() => onLang("en")}>English</button>
+    <button type="button" class=${LANG === "en" ? "on" : ""} aria-pressed=${LANG === "en"} title="English" onClick=${() => onLang("en")}>EN</button>
+    <button type="button" class=${LANG === "es" ? "on" : ""} aria-pressed=${LANG === "es"} title="Español" onClick=${() => onLang("es")}>ES</button>
   </span>`;
 }
 
@@ -245,7 +250,7 @@ function ChangePassword({ onClose, forced = false }) {
     e.preventDefault();
     if (a.length < 8) return setErr(t("Usa al menos 8 caracteres."));
     if (a !== b) return setErr(t("Las contraseñas no coinciden."));
-    try { await api.changePassword(a); toast(t("Contraseña cambiada")); if (forced) reload(); else onClose(); } catch (x) { setErr(x.message); }
+    try { await api.changePassword(a); toast(t("Contraseña cambiada")); if (forced) reload(); else onClose(); } catch (x) { setErr(srv(x.message)); }
   };
   return html`<${Modal} title=${forced ? t("Crea tu contraseña") : t("Cambiar contraseña")} onClose=${onClose} locked=${forced}>
     <form class="stack" onSubmit=${save}>
@@ -754,7 +759,7 @@ function PrepContent({ person, history, onGenerated }) {
       const r = await api.fn("prep", { person_id: person.id, lang: LANG });
       const g = r.generation ? { ...r.generation, kind: "prep", result: r.prep } : { id: "nuevo", kind: "prep", result: r.prep, created_at: new Date().toISOString(), created_by_name: t("tú") };
       setPrep(r.prep); setSel(g); onGenerated?.(g);
-    } catch (x) { setErr(x.message); }
+    } catch (x) { setErr(srv(x.message)); }
     setBusy(false);
   };
   useEffect(() => { if (!previas.length) generar(); }, []);
@@ -1716,11 +1721,16 @@ export function campana(ctx) {
   const { data, isAdmin, me, session, bamboo, idx } = ctx;
   const yo = session.user.id;
   const grupos = [];
-  // 1) Incidencias nuevas
-  const incs = nuevas(ctx);
+  // 1) Kudos e incidencias nuevas (los kudos primero: lo positivo también se ve)
+  const todasNuevas = nuevas(ctx);
+  const kud = todasNuevas.filter(esKudos);
+  if (kud.length) grupos.push({ k: "kud", href: "#/incidencias", titulo: t("Kudos nuevos"),
+    items: kud.map((i) => ({ id: "k" + i.id, kudos: true, meta: (esMia(ctx, i) && !isAdmin ? t("Para ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on) + " · " + t("de {p}", { p: srv(i.created_by_name) ?? "—" }),
+      txt: t(i.category) + (i.note ? " — " + i.note : ""), when: new Date(i.created_at).getTime() })) });
+  const incs = todasNuevas.filter((i) => !esKudos(i));
   if (incs.length) grupos.push({ k: "inc", href: "#/incidencias", titulo: t("Incidencias nuevas"),
     items: incs.map((i) => ({ id: "i" + i.id, meta: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on),
-      txt: t(i.category) + (i.note || i.detail ? " — " + (i.note || i.detail) : ""), when: new Date(i.created_at).getTime() })) });
+      txt: t(i.category) + (i.note || i.detail ? " — " + (i.note || srv(i.detail)) : ""), when: new Date(i.created_at).getTime() })) });
   // 2) Mis pendientes vencidos o que vencen en 2 días
   const mio = (a) => (me?.person_id ? a.owner_id === me.person_id : false) || (isAdmin && !a.owner_id);
   const pend = data.actions.filter((a) => OPEN.includes(a.status) && a.due_date && mio(a) && daysUntil(a.due_date) <= 2)
@@ -1746,7 +1756,7 @@ export function campana(ctx) {
     const sobre = [];
     for (const [k, n] of conteoMes(data.incidents, mes)) {
       if (n < lim) continue;
-      const del = data.incidents.filter((i) => !i.voided && String(i.occurred_on).startsWith(mes) && (i.person_id ?? "b:" + i.bamboo_id) === k)
+      const del = data.incidents.filter((i) => !i.voided && !esKudos(i) && String(i.occurred_on).startsWith(mes) && (i.person_id ?? "b:" + i.bamboo_id) === k)
         .sort((a, b) => a.created_at.localeCompare(b.created_at));
       if (!del.length || esMia(ctx, del[0])) continue;
       sobre.push({ id: "u" + k + n, txt: t("{p}: {n} en el mes", { p: nombreDe(ctx, del[0]), n }), when: new Date(del[lim - 1]?.created_at ?? del[0].created_at).getTime() });
@@ -1786,7 +1796,7 @@ function Campana() {
       ${c.grupos.length === 0 ? html`<p class="muted small bell-empty">${t("Todo al día. No hay nada pendiente tuyo.")}</p>`
         : c.grupos.map((g) => html`<div class="bell-g" key=${g.k}>
           <a class="bell-gt" href=${g.href}><span>${g.titulo}</span><span class="pill">${g.items.length}</span></a>
-          <ul>${g.items.slice(0, 4).map((i) => html`<li key=${i.id} class=${(i.when > desde ? "is-new" : "") + (i.late ? " late" : "")}><a href=${i.href ?? g.href}>${i.meta && html`<span class="bi-meta">${i.meta}</span>`}<span class="bi-txt">${i.txt}</span></a></li>`)}</ul>
+          <ul>${g.items.slice(0, 4).map((i) => html`<li key=${i.id} class=${(i.when > desde ? "is-new" : "") + (i.late ? " late" : "") + (i.kudos ? " kudos" : "")}><a href=${i.href ?? g.href}>${i.meta && html`<span class="bi-meta">${i.meta}</span>`}<span class="bi-txt">${i.txt}</span></a></li>`)}</ul>
           ${g.items.length > 4 && html`<a class="small bell-more" href=${g.href}>${t("Ver las {n}", { n: g.items.length })}</a>`}
         </div>`)}
     </div>`}
@@ -1803,7 +1813,7 @@ function Shell({ api, session, onLang }) {
   const route = useRoute();
 
   const reload = useCallback(async () => {
-    try { setData(await api.loadAll()); } catch (x) { setErr(x.message); }
+    try { setData(await api.loadAll()); } catch (x) { setErr(srv(x.message)); }
   }, []);
   useEffect(() => { reload(); }, []);
   // Cambio 13: Bamboo se carga aparte (si falla, el resto de la app sigue igual)
@@ -1823,7 +1833,7 @@ function Shell({ api, session, onLang }) {
     if (me && !langSynced) {
       setLangSynced(true);
       let chosen = null;
-      try { chosen = localStorage.getItem("tc-lang"); } catch (_) {}
+      try { chosen = localStorage.getItem(LANG_KEY); } catch (_) {}
       if (chosen && chosen !== me.lang) api.rpc("set_lang", { l: chosen }).catch(() => {});
       else if (!chosen && me.lang && me.lang !== LANG) onLang(me.lang);
     }
@@ -1870,11 +1880,11 @@ function Shell({ api, session, onLang }) {
     case "reglas": page = html`<${ReglasView} />`; break;
     default: page = html`<${TeamView} />`;
   }
-  const nav = isMember ? [["mi", t("Mi espacio"), null], ["horas", t("Mis horas"), null], ["incidencias", t("Mis incidencias"), incNuevas || null],
+  const nav = isMember ? [["mi", t("Mi espacio"), null], ["horas", t("Mis horas"), null], ["incidencias", t("Incidencias y kudos"), incNuevas || null],
     ["reuniones", t("Mis reuniones"), null], ["pendientes", t("Mis pendientes"), lateCount || null], ["desarrollo", t("Mi desarrollo"), null], ["notas", t("Notas de mi líder"), null]] : [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
-    ["incidencias", t("Incidencias"), incNuevas || null],
+    ["incidencias", t("Incidencias y kudos"), incNuevas || null],
     ["reuniones", t("Reuniones"), null],
     ["pendientes", t("Pendientes"), lateCount || null],
     ["ideas", t("Banco de ideas"), null],
@@ -1915,7 +1925,7 @@ function Root({ api }) {
   const [, setLangTick] = useState(0);
   const onLang = (l) => {
     LANG = l === "en" ? "en" : "es";
-    try { localStorage.setItem("tc-lang", LANG); } catch (_) {}
+    try { localStorage.setItem(LANG_KEY, LANG); } catch (_) {}
     document.documentElement.lang = LANG;
     setLangTick((x) => x + 1);
   };

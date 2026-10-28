@@ -7,7 +7,7 @@
 import { h } from "preact";
 import { useState, useMemo } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, Busy, PersonLink, getLang } from "./app.js";
+import { useApp, t, toast, Modal, Empty, Busy, PersonLink, getLang, srv } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -39,9 +39,6 @@ export const fmtH = (x) => {
   return Number.isInteger(v) ? String(v) : v.toFixed(2).replace(/0+$/, "").replace(/\.$/, "");
 };
 // La info viene del servidor en español ("Paraguay · Horario jue a lun"): se traduce al mostrar
-const DIA_EN = { lun: "Mon", mar: "Tue", mie: "Wed", jue: "Thu", vie: "Fri", sab: "Sat", dom: "Sun" };
-const infoTxt = (s) => (getLang() !== "en" || !s ? s ?? "" : s.replace("País no detectado", "Country not detected")
-  .replace(/Horario (\w+) a (\w+)/, (_, a, b) => `Schedule ${DIA_EN[a] ?? a} to ${DIA_EN[b] ?? b}`));
 const norm = (s) => String(s ?? "").trim().toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ");
 const titulo = (s) => String(s ?? "").replace(/\b\w/g, (c) => c.toUpperCase());
 const hace = (ts) => {
@@ -85,7 +82,7 @@ const ESTADO_TXT = { ok: "Completo", falta: "Sin registro", parcial: "Incompleto
 function tooltip(d) {
   const st = estado(d);
   const partes = [`${larga(d.day)}: ${t("{a}h de {b}h", { a: fmtH(d.hours), b: fmtH(d.expected) })} — ${t(ESTADO_TXT[st] ?? st)}`];
-  if (d.reason) partes.push(d.reason);
+  if (d.reason) partes.push(srv(d.reason));
   for (const [p, hh] of Object.entries(d.other_projects ?? {})) partes.push(t("Proyecto adicional (no cuenta): {p} {h}h", { p, h: fmtH(hh) }));
   if (d.note) partes.push(`${t("Comentario")}: “${d.note}”`);
   if (d.ai) partes.push(`IA: ${d.ai}`);
@@ -236,7 +233,7 @@ export function SyncButton() {
     setBusy(true);
     try {
       const r = await api.syncBamboo();
-      toast(r?.message ? t("Listo: {m}", { m: r.message }) : t("Listo"));
+      toast(r?.message ? t("Listo: {m}", { m: srv(r.message) }) : t("Listo"));
       if (r?.stats?.avisos?.length) toast(r.stats.avisos[0], "bad");
     } catch (x) { toast(x.message, "bad"); }
     await reloadBamboo();
@@ -358,13 +355,31 @@ function Grupo({ g, ms, res, cols: todas, ix, modo, pasados, corte }) {
   </details>`;
 }
 
+// Cambio 22: un comentario de IA resume los dos meses sincronizados; se muestra solo en el mes de las fechas que menciona.
+const MES_N = { ene: 1, jan: 1, feb: 2, mar: 3, abr: 4, apr: 4, may: 5, jun: 6, jul: 7, ago: 8, aug: 8, sep: 9, oct: 10, nov: 11, dic: 12, dec: 12 };
+export function fechasMencionadas(texto, ref) {
+  const out = new Set();
+  const anio = Number(String(ref).slice(0, 4)), mesRef = Number(String(ref).slice(5, 7));
+  const iso2 = (d, m) => {
+    const y = m - mesRef > 6 ? anio - 1 : mesRef - m > 6 ? anio + 1 : anio;   // cruces de año (dic/ene)
+    return `${y}-${String(m).padStart(2, "0")}-${String(d).padStart(2, "0")}`;
+  };
+  const re1 = /\b(\d{1,2}) (ene|feb|mar|abr|may|jun|jul|ago|sep|oct|nov|dic)\w*/gi;        // "15 sep"
+  const re2 = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w* (\d{1,2})\b/gi;      // "Sep 15"
+  for (const m of String(texto ?? "").matchAll(re1)) out.add(iso2(Number(m[1]), MES_N[m[2].toLowerCase()]));
+  for (const m of String(texto ?? "").matchAll(re2)) out.add(iso2(Number(m[2]), MES_N[m[1].toLowerCase()]));
+  return [...out].filter((d) => Number(d.slice(8, 10)) >= 1 && Number(d.slice(8, 10)) <= 31).sort();
+}
+
 function Fila({ e, r, cols, ix, modo, pasados, corte }) {
   const [open, setOpen] = useState(false);
   const { idx } = useApp();
   const dm = ix.days.get(e.bamboo_id) ?? new Map();
   const hoy = hoyLocal();
   const enRango = new Set(pasados);
-  const obs = (e.obs ?? []).filter((o) => !o.fechas?.length || o.fechas.some((f) => enRango.has(f)));
+  const ref = pasados[0] ?? hoy;
+  const fechasDe = (o) => { const m = o.fuente === "IA" ? fechasMencionadas(o.texto, ref) : []; return m.length ? m : o.fechas ?? []; };
+  const obs = (e.obs ?? []).map((o) => ({ ...o, _f: fechasDe(o) })).filter((o) => !o._f.length || o._f.some((f) => enRango.has(f)));
   const notas = pasados.map((d) => dm.get(d)).filter((d) => d?.note);
   const corr = pasados.map((d) => dm.get(d)).filter((d) => d?.before_state);
   const adic = {};
@@ -372,7 +387,7 @@ function Fila({ e, r, cols, ix, modo, pasados, corte }) {
   const persona = e.person_id && idx.person(e.person_id);
   const n = obs.length + corr.length;
   return html`<tr class=${"hb-row" + (open ? " open" : "")} onClick=${() => setOpen(!open)}>
-      <td class="hb-name"><span>${e.full_name}</span><span class="small muted">${infoTxt(e.info)}</span>${n > 0 && html`<span class="hb-obs" title=${t("Observaciones")}>${n}</span>`}</td>
+      <td class="hb-name"><span>${e.full_name}</span><span class="small muted">${srv(e.info)}</span>${n > 0 && html`<span class="hb-obs" title=${t("Observaciones")}>${n}</span>`}</td>
       ${cols.map((d) => html`<td class="d">${d > corte ? html`<span class=${modo === "mes" ? "q vacio" : "c vacio"}></span>` : html`<${Celda} d=${dm.get(d)} mes=${modo === "mes"} />`}</td>`)}
       <td class="right nowrap">${fmtH(r.reg)}<span class="muted">/${fmtH(r.esp)}h</span>${r.adic > 0 && html`<div class="small adx">+${fmtH(r.adic)}h ${t("adic.")}</div>`}</td>
       <td class="right"><b class=${"hb-pct " + tono(r.pct, r.pendiente)}>${Math.floor(r.pct)}%</b></td>
@@ -380,7 +395,7 @@ function Fila({ e, r, cols, ix, modo, pasados, corte }) {
     </tr>
     ${open && html`<tr class="hb-detail"><td colspan=${cols.length + 4}>
       <div class="hb-det">
-        ${obs.map((o) => html`<p class=${"hb-o " + o.tipo}><span class="pill">${o.fuente}</span> ${o.texto}</p>`)}
+        ${obs.map((o) => html`<p class=${"hb-o " + o.tipo}><span class="pill">${t(o.fuente)}${o.fuente === "IA" && o._f.length ? " · " + o._f.filter((f) => enRango.has(f)).map(mini).join(", ") : ""}</span> ${srv(o.texto)}</p>`)}
         ${corr.map((d) => html`<p class="hb-o info"><span class="pill">${t("Corregido")}</span> ${t("{d}: antes {s} ({h}h, visto {f}); ahora {a}.", { d: mini(d.day), s: t(ESTADO_TXT[d.before_state.state] ?? ""), h: fmtH(d.before_state.hours ?? 0), f: d.before_state.seen ? mini(d.before_state.seen) : "—", a: t(ESTADO_TXT[estado(d)] ?? "") })}</p>`)}
         ${notas.length > 0 && html`<div><h4 class="small">${t("Comentarios")}</h4>${notas.map((d) => html`<p class="small"><b>${mini(d.day)}</b> ${d.note}</p>`)}</div>`}
         ${Object.keys(adic).length > 0 && html`<p class="small"><b>${t("Otros proyectos (no cuentan):")}</b> ${Object.entries(adic).map(([p, v]) => `${p} ${fmtH(v)}h`).join(" · ")}</p>`}
@@ -408,7 +423,7 @@ function GoalItem({ g }) {
     : g.overdue ? [t("Vencido {d}", { d: mini(g.due) }), "hb-bad"] : g.soon ? [t("Vence {d}", { d: mini(g.due) }), "hb-warn"]
     : [g.due ? t("Vence {d}", { d: mini(g.due) }) : t("Sin fecha"), ""];
   const fc = g.state === "completado" || g.pct >= 80 ? "" : g.pct >= 40 ? "mid" : "low";
-  return html`<div class="hb-goal"><span>${g.title}</span><span class="hb-track sm"><span class=${"hb-fill " + fc} style=${`width:${g.pct}%`}></span></span><span class="small">${Math.round(g.pct)}%</span><span class=${"pill " + cls}>${est}</span></div>`;
+  return html`<div class="hb-goal"><span>${srv(g.title)}</span><span class="hb-track sm"><span class=${"hb-fill " + fc} style=${`width:${g.pct}%`}></span></span><span class="small">${Math.round(g.pct)}%</span><span class=${"pill " + cls}>${est}</span></div>`;
 }
 
 function Desarrollo({ ix, gs, match }) {
@@ -602,13 +617,13 @@ function EstadoSync() {
   return html`<div>
     <div class="block-s">
       <h2>${t("Última actualización")}</h2>
-      ${ok ? html`<p>${t("{m}. Actualizado {h} ({s} s). Período revisado: {a} a {b}. IA: {ia}.", { m: ok.message, h: hace(ok.finished_at), s: st.segundos ?? "?", a: st.desde ? mini(st.desde) : "—", b: st.hasta ? mini(st.hasta) : "—", ia: st.ia ?? "—" })}</p>` : html`<p class="muted">${t("Todavía no se actualizó nunca.")}</p>`}
-      ${(st.avisos ?? []).map((a) => html`<p class="warn small">${a}</p>`)}
+      ${ok ? html`<p>${t("{m}. Actualizado {h} ({s} s). Período revisado: {a} a {b}. IA: {ia}.", { m: srv(ok.message), h: hace(ok.finished_at), s: st.segundos ?? "?", a: st.desde ? mini(st.desde) : "—", b: st.hasta ? mini(st.hasta) : "—", ia: st.ia ?? "—" })}</p>` : html`<p class="muted">${t("Todavía no se actualizó nunca.")}</p>`}
+      ${(st.avisos ?? []).map((a) => html`<p class="warn small">${srv(a)}</p>`)}
       <p class="small muted">${t("Automático: lunes a viernes cada hora de 8:05 a 19:05 (si activaste 07_bamboo_cron.sql).")}</p>
       <details class="mt"><summary>${t("Historial ({n})", { n: log.length })}</summary>
         <table class="tbl small"><thead><tr><th>${t("Inicio")}</th><th>${t("Origen")}</th><th>${t("Resultado")}</th></tr></thead>
           <tbody>${log.map((l) => html`<tr key=${l.id}><td>${new Date(l.started_at).toLocaleString()}</td><td>${l.source === "cron" ? t("Automático") : t("Botón")}</td>
-            <td class=${l.ok === false ? "late-t" : ""}>${l.ok === null || l.ok === undefined ? (l.finished_at ? "—" : t("En curso…")) : l.message}</td></tr>`)}</tbody></table>
+            <td class=${l.ok === false ? "late-t" : ""}>${l.ok === null || l.ok === undefined ? (l.finished_at ? "—" : t("En curso…")) : srv(l.message)}</td></tr>`)}</tbody></table>
       </details>
     </div>
 
@@ -1003,10 +1018,10 @@ export function MisHoras() {
     <${Leyenda} mes=${false} />
     ${r.problemas.length > 0 && html`<section class="block"><h2>${t("Días a completar")}</h2>
       <ul class="dias-list">${r.problemas.map((d) => { const x = dm.get(d); return html`<li key=${d}><button type="button" class="link" onClick=${() => setSel(d)}>${larga(d)}</button>
-        <span class="small">${t("{a}h de {b}h", { a: fmtH(x.hours), b: fmtH(x.expected) })}</span>${x.reason && html`<span class="small muted">· ${x.reason}</span>`}</li>`; })}</ul>
+        <span class="small">${t("{a}h de {b}h", { a: fmtH(x.hours), b: fmtH(x.expected) })}</span>${x.reason && html`<span class="small muted">· ${srv(x.reason)}</span>`}</li>`; })}</ul>
       <p class="small muted">${t("Complétalos en Bamboo; se actualiza solo durante el día.")}</p></section>`}
     ${conNota.length > 0 && html`<section class="block"><h2>${t("Días con comentarios")}</h2>
-      <ul class="dias-list">${conNota.map((x) => html`<li key=${x.day}><button type="button" class="link" onClick=${() => setSel(x.day)}>${larga(x.day)}</button><span class="small muted">${x.note ? `“${x.note}”` : x.reason}</span></li>`)}</ul></section>`}
+      <ul class="dias-list">${conNota.map((x) => html`<li key=${x.day}><button type="button" class="link" onClick=${() => setSel(x.day)}>${larga(x.day)}</button><span class="small muted">${x.note ? `“${x.note}”` : srv(x.reason)}</span></li>`)}</ul></section>`}
     ${fer.length > 0 && html`<section class="block"><h2>${t("Feriados del mes")}</h2>
       <ul class="dias-list">${fer.map((f) => html`<li key=${f.day}><span>${larga(f.movida?.new_day ?? f.day)}</span><span class="small muted">${f.name}${f.region ? ` · ${f.region}` : ""}${f.movida ? ` · ${t("movido del {d}", { d: mini(f.day) })}` : ""}${Number(f.fraction) < 1 ? ` · ${t("medio día")}` : ""}</span></li>`)}</ul></section>`}
     `}

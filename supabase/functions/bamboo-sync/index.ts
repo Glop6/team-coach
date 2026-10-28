@@ -321,8 +321,8 @@ Reglas:
   "revisar" y di qué falta (ej. "dice que movió el feriado pero no indica a qué día").
 - Nunca justifiques un día sin un comentario relacionado. Solo puedes justificar días con estado "falta", "parcial"
   o "en_plazo" (días de la semana en curso que todavía no vencen pero ya tienen menos horas de lo esperado).
-- observacion: una frase corta en español (máximo 160 caracteres), con fechas como "1 oct".
-  Ejemplo: "Cambió el feriado del 1 oct al 20 oct a pedido del cliente; ambos días cuadran."
+- observacion: one short sentence in ENGLISH (max 160 characters), always mentioning the date(s) it refers to, like "Oct 1".
+  Example: "Swapped the Oct 1 holiday to Oct 20 at the client's request; both days check out."
 
 Responde SOLO con JSON válido, sin texto adicional:
 {"personas":[{"id":"P1","estado":"ok|justificado|revisar","observacion":"...","dias_justificados":["YYYY-MM-DD"]}]}`;
