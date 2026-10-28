@@ -7,9 +7,9 @@
 //  · Cambio 22: kudos (mensajes positivos) en la misma sección; no cuentan para el umbral.
 // =====================================================================
 import { h } from "preact";
-import { useState, useEffect } from "preact/hooks";
+import { useState, useEffect, useRef } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName, srv } from "./app.js";
+import { useApp, t, toast, Modal, Empty, PersonLink, PersonSelect, fmtDate, today, firstName, srv, getLang } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -185,63 +185,242 @@ export function IncidentRow({ inc, showPerson = true, nueva = false }) {
 }
 
 // ---------------------------------------------------------------------
-// Página Incidencias
+// Página Incidencias y kudos (Cambio 23): resumen del equipo por período,
+// gráfico mes a mes e historial completo de cada persona.
 // ---------------------------------------------------------------------
+const ISO = (d) => d.toISOString().slice(0, 10);
+const sumar = (s, n) => ISO(new Date(Date.parse(s + "T00:00:00Z") + n * 86400000));
+const lunesDe = (s) => { const wd = (new Date(s + "T00:00:00Z").getUTCDay() + 6) % 7; return sumar(s, -wd); };
+const finMes = (ym) => { const [y, m] = ym.split("-").map(Number); return ISO(new Date(Date.UTC(y, m, 0))); };
+const mesMas = (ym, n) => { const [y, m] = ym.split("-").map(Number); const t = y * 12 + (m - 1) + n; return `${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, "0")}`; };
+const MESES_C = { es: ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"], en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"] };
+const MESES_L = { es: ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"], en: ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"] };
+const lg = () => (getLang() === "en" ? "en" : "es");
+const mesCorto = (ym) => `${MESES_C[lg()][Number(ym.slice(5, 7)) - 1]}${ym.slice(0, 4) !== today().slice(0, 4) ? " " + ym.slice(2, 4) : ""}`;
+const mesLargo = (ym) => { const n = MESES_L[lg()][Number(ym.slice(5, 7)) - 1]; return n.charAt(0).toUpperCase() + n.slice(1) + " " + ym.slice(0, 4); };
+const clave = (i) => i.person_id ?? "b:" + i.bamboo_id;
+
+/** Rango del período elegido y el período anterior del mismo largo (para la tendencia). */
+export function rangoPeriodo(periodo, mes, hoy = today()) {
+  if (periodo === "semana") { const ini = lunesDe(hoy); return { ini, fin: hoy, pIni: sumar(ini, -7), pFin: sumar(hoy, -7) }; }
+  if (periodo === "mes") {
+    const ini = mes + "-01", esActual = mes === hoy.slice(0, 7), fin = esActual ? hoy : finMes(mes);
+    const prev = mesMas(mes, -1), dia = Number(fin.slice(8, 10));
+    const pFin = esActual ? `${prev}-${String(Math.min(dia, Number(finMes(prev).slice(8, 10)))).padStart(2, "0")}` : finMes(prev);
+    return { ini, fin, pIni: prev + "-01", pFin };
+  }
+  if (periodo === "tres") { const ini = mesMas(hoy.slice(0, 7), -2) + "-01"; return { ini, fin: hoy, pIni: mesMas(hoy.slice(0, 7), -5) + "-01", pFin: sumar(ini, -1) }; }
+  if (periodo === "anio") { const y = hoy.slice(0, 4), py = String(Number(y) - 1); return { ini: y + "-01-01", fin: hoy, pIni: py + "-01-01", pFin: py + hoy.slice(4) }; }
+  return { ini: "0000-01-01", fin: hoy, pIni: null, pFin: null };
+}
+
+function Tendencia({ d }) {
+  if (d === null) return html`<span class="muted">—</span>`;
+  if (d === 0) return html`<span class="trend-eq" title=${t("Igual que el período anterior")}>= 0</span>`;
+  return d > 0
+    ? html`<span class="trend-up" title=${t("Más incidencias que el período anterior")}>▲ +${d}</span>`
+    : html`<span class="trend-down" title=${t("Menos incidencias que el período anterior")}>▼ ${d}</span>`;
+}
+
+/** Barras agrupadas por mes (o semana): incidencias y kudos del equipo. */
+function GraficoMeses({ cols, sel, onPick }) {
+  const [hov, setHov] = useState(null);
+  // Ancho real del contenedor: el gráfico ocupa todo el ancho y el texto no se achica
+  const caja = useRef(null);
+  const [ancho, setAncho] = useState(900);
+  useEffect(() => {
+    const el = caja.current;
+    if (!el) return;
+    const medir = () => setAncho(Math.max(280, el.clientWidth));
+    medir();
+    const ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(medir) : null;
+    ro?.observe(el);
+    return () => ro?.disconnect();
+  }, []);
+  const max = Math.max(1, ...cols.map((c) => Math.max(c.inc, c.kud)));
+  const pasos = max <= 4 ? max : 4;
+  const tope = Math.ceil(max / pasos) * pasos;
+  const H = 150, top = 14, base = top + H, gap = 2, izq = 30;
+  const colW = Math.max(38, Math.min(140, (ancho - izq - 6) / Math.max(cols.length, 1)));
+  const barW = Math.max(10, Math.min(26, Math.floor(colW * 0.26)));
+  const W = izq + cols.length * colW + 6;
+  const y = (v) => base - (v / tope) * H;
+  const barra = (x, v, cls) => {
+    if (!v) return null;
+    const h = Math.max(base - y(v), 3), r = Math.min(4, h / 2);
+    return html`<path class=${cls} d=${`M${x},${base} V${base - h + r} Q${x},${base - h} ${x + r},${base - h} H${x + barW - r} Q${x + barW},${base - h} ${x + barW},${base - h + r} V${base} Z`} />`;
+  };
+  const c = hov !== null ? cols[hov] : null;
+  return html`<div class="chart-box">
+    <div class="chart-legend small"><span><i class="sw-inc"></i>${t("Incidencias")}</span><span><i class="sw-kud"></i>${t("Kudos")}</span></div>
+    <div class="chart-scroll" ref=${caja}>
+      <svg class="chart" viewBox=${`0 0 ${W} ${base + 22}`} width=${W} height=${base + 22} role="img" aria-label=${t("Incidencias y kudos por mes")}>
+        ${Array.from({ length: pasos + 1 }, (_, k) => { const v = (tope / pasos) * k; return html`<g key=${"g" + k}><line class="grid" x1=${izq} x2=${W} y1=${y(v)} y2=${y(v)} /><text class="ax" x=${izq - 6} y=${y(v) + 3} text-anchor="end">${v}</text></g>`; })}
+        ${cols.map((col, i) => { const x0 = izq + i * colW + (colW - (barW * 2 + gap)) / 2; return html`<g key=${col.key} class=${"col" + (sel === col.key ? " on" : "") + (hov === i ? " hov" : "")}>
+          ${sel === col.key && html`<rect class="col-sel" x=${izq + i * colW + 2} y=${top - 6} width=${colW - 4} height=${H + 6} rx="6" />`}
+          ${barra(x0, col.inc, "b-inc")}${barra(x0 + barW + gap, col.kud, "b-kud")}
+          <text class=${"ax" + (sel === col.key ? " ax-on" : "")} x=${izq + i * colW + colW / 2} y=${base + 15} text-anchor="middle">${col.label}</text>
+          <rect class="hit" x=${izq + i * colW} y=${top - 6} width=${colW} height=${H + 30} onMouseEnter=${() => setHov(i)} onMouseLeave=${() => setHov(null)}
+            onClick=${() => col.pick && onPick(col.pick)} style=${col.pick ? "cursor:pointer" : ""}><title>${`${col.title}: ${col.inc} · ${col.kud} kudos`}</title></rect>
+        </g>`; })}
+      </svg>
+      ${c && html`<div class="chart-tip" style=${`left:${((izq + hov * colW + colW / 2) / W) * 100}%`}>
+        <strong>${c.title}</strong><span><i class="sw-inc"></i>${c.inc === 1 ? t("1 incidencia") : t("{n} incidencias", { n: c.inc })}</span><span><i class="sw-kud"></i>${t("{n} kudos", { n: c.kud })}</span>
+        ${c.pick && html`<span class="muted">${t("Clic para ver ese mes")}</span>`}</div>`}
+    </div>
+  </div>`;
+}
+
+/** Historial completo de una persona, agrupado por mes. */
+function HistorialPersona({ k, nombre, incs, onClose, rango }) {
+  const ctx = useApp();
+  const [soloPeriodo, setSoloPeriodo] = useState(false);
+  const [verAnuladas, setVerAnuladas] = useState(false);
+  const suyas = incs.filter((i) => clave(i) === k).sort((a, b) => String(b.occurred_on).localeCompare(String(a.occurred_on)) || String(b.created_at).localeCompare(String(a.created_at)));
+  const vis = suyas.filter((i) => (verAnuladas || !i.voided) && (!soloPeriodo || (i.occurred_on >= rango.ini && i.occurred_on <= rango.fin)));
+  const act = suyas.filter((i) => !i.voided);
+  const lim = umbral(ctx.bamboo);
+  const porMes = new Map();
+  for (const i of act.filter((i) => !esKudos(i))) porMes.set(mesDe(i.occurred_on), (porMes.get(mesDe(i.occurred_on)) ?? 0) + 1);
+  const mesesSobre = [...porMes.values()].filter((n) => n >= lim).length;
+  const grupos = [];
+  for (const i of vis) { const m = mesDe(i.occurred_on); let g = grupos.find((x) => x.m === m); if (!g) grupos.push((g = { m, items: [] })); g.items.push(i); }
+  const pid = suyas[0]?.person_id;
+  return html`<section class="block hist-p" id="hist-persona">
+    <div class="row between"><h2>${t("Historial de {n}", { n: nombre })}</h2>
+      <div class="row">${pid && html`<a class="small" href=${"#/persona/" + pid}>${t("Ver perfil")} →</a>`}<button class="icon" aria-label=${t("Cerrar")} onClick=${onClose}>✕</button></div></div>
+    <div class="pulse">
+      <span class="pulse-item"><strong>${act.filter((i) => !esKudos(i)).length}</strong> ${t("incidencias en total")}</span>
+      <span class="pulse-item kudos-pulse"><strong>${act.filter(esKudos).length}</strong> ${t("kudos en total")}</span>
+      <span class=${"pulse-item" + (mesesSobre ? " alert" : "")}><strong>${mesesSobre}</strong> ${t("meses sobre el umbral ({n})", { n: lim })}</span>
+      <span class="pulse-item"><strong>${act[act.length - 1] ? fmtDate(act[act.length - 1].occurred_on) : "—"}</strong> ${t("primer registro")}</span>
+    </div>
+    <div class="row hb-bar">
+      <label class="check small"><input type="checkbox" checked=${soloPeriodo} onChange=${(e) => setSoloPeriodo(e.target.checked)} />${t("Solo el período elegido")}</label>
+      <label class="check small"><input type="checkbox" checked=${verAnuladas} onChange=${(e) => setVerAnuladas(e.target.checked)} />${t("Ver anuladas")}</label>
+    </div>
+    ${grupos.length ? grupos.map((g) => { const ni = g.items.filter((i) => !i.voided && !esKudos(i)).length, nk = g.items.filter((i) => !i.voided && esKudos(i)).length;
+      return html`<div class="hist-mes" key=${g.m}><h3 class="small-h">${mesLargo(g.m)} <span class="small muted">· ${ni === 1 ? t("1 incidencia") : t("{n} incidencias", { n: ni })} · ${t("{n} kudos", { n: nk })}</span>${ni >= lim && html` <span class="pill hb-bad">${t("Umbral")}</span>`}</h3>
+        <ul class="inc-list">${g.items.map((i) => html`<${IncidentRow} inc=${i} key=${i.id} showPerson=${false} />`)}</ul></div>`; })
+      : html`<${Empty}>${t("Sin registros en este período.")}<//>`}
+  </section>`;
+}
+
 export function IncidenciasView() {
   const ctx = useApp();
-  const { data, bamboo, isAdmin } = ctx;
+  const { data, bamboo, isAdmin, idx } = ctx;
+  const hoy = today();
   const [nueva, setNueva] = useState(null);   // "incidencia" | "kudos"
-  const [mes, setMes] = useState(today().slice(0, 7));
+  const [periodo, setPeriodo] = useState(() => { try { return localStorage.getItem("tc-inc-periodo") || "mes"; } catch (_) { return "mes"; } });
+  const [mes, setMes] = useState(hoy.slice(0, 7));
   const [quien, setQuien] = useState("");
+  const [tipo, setTipo] = useState("todas");
   const [verAnuladas, setVerAnuladas] = useState(false);
-  const [soloAuto, setSoloAuto] = useState("todas");
-  // Lo nuevo se calcula con el "visto" de cuando entré; al entrar queda todo como visto.
+  const [verTodos, setVerTodos] = useState(false);
+  const [limite, setLimite] = useState(60);
   const [desde] = useState(() => vistoDesde(ctx, "incidents"));
-  const nuevasIds = new Set(nuevas(ctx, desde).map((i) => i.id));
   useEffect(() => { if (!data.incidents_error) ctx.markSeen?.("incidents"); }, []);
+  useEffect(() => { if (quien) setTimeout(() => document.getElementById("hist-persona")?.scrollIntoView({ behavior: "smooth", block: "start" }), 50); }, [quien]);
+  const setP = (p) => { setPeriodo(p); try { localStorage.setItem("tc-inc-periodo", p); } catch (_) {} };
+  if (data.incidents_error) return html`<section class="page narrow"><h1>${t("Incidencias y kudos")}</h1><p class="warn mt">${isAdmin ? t("Falta correr 12_incidencias.sql en Supabase.") : t("Todavía no está disponible.")}</p></section>`;
+  const nuevasIds = new Set(nuevas(ctx, desde).map((i) => i.id));
   const todasVis = data.incidents ?? [];
   const mias = isAdmin ? [] : todasVis.filter((i) => esMia(ctx, i));
   const incs = isAdmin ? todasVis : todasVis.filter((i) => !esMia(ctx, i));
-  if (data.incidents_error) return html`<section class="page narrow"><h1>${t("Incidencias")}</h1><p class="warn mt">${isAdmin ? t("Falta correr 12_incidencias.sql en Supabase.") : t("Todavía no está disponible.")}</p></section>`;
   const lim = umbral(bamboo);
-  const delMes = incs.filter((i) => mesDe(i.occurred_on) === mes);
-  const filtradas = delMes.filter((i) => (verAnuladas || !i.voided) && (!quien || (i.person_id ?? "b:" + i.bamboo_id) === quien)
-    && (soloAuto === "todas" || (soloAuto === "auto" ? i.source === "bamboo" : soloAuto === "kudos" ? esKudos(i) : !esKudos(i))));
-  const conteo = conteoMes(incs, mes);
-  const claves = [...new Set(delMes.filter((i) => !i.voided).map((i) => i.person_id ?? "b:" + i.bamboo_id))];
-  const resumen = claves.map((k) => {
-    const ej = incs.find((i) => (i.person_id ?? "b:" + i.bamboo_id) === k);
-    const act = delMes.filter((i) => !i.voided && (i.person_id ?? "b:" + i.bamboo_id) === k);
-    return { k, n: conteo.get(k) ?? 0, nombre: nombreDe(ctx, ej), pid: ej.person_id, crit: act.filter((i) => !esKudos(i) && i.severity === "critica").length,
-      auto: act.filter((i) => i.source === "bamboo").length, kudos: act.filter(esKudos).length };
-  }).sort((a, b) => b.n - a.n || b.kudos - a.kudos || a.nombre.localeCompare(b.nombre));
-  const meses = [...new Set([today().slice(0, 7), ...incs.map((i) => mesDe(i.occurred_on))])].sort().reverse();
-  const anuladas = delMes.filter((i) => i.voided).length;
-  const sobre = resumen.filter((r) => r.n >= lim);
-  return html`<section class="page">
+  const r = rangoPeriodo(periodo, mes, hoy);
+  const enP = (i, a, b) => i.occurred_on >= a && i.occurred_on <= b;
+  const delP = incs.filter((i) => enP(i, r.ini, r.fin));
+  const actP = delP.filter((i) => !i.voided);
+  const prevP = r.pIni ? incs.filter((i) => !i.voided && enP(i, r.pIni, r.pFin)) : null;
+
+  // Resumen por persona: toda mi gente (también quien no tiene registros) + quien tenga registros
+  const nombreK = new Map();
+  for (const i of incs) if (!nombreK.has(clave(i))) nombreK.set(clave(i), { nombre: nombreDe(ctx, i), pid: i.person_id });
+  if (verTodos) for (const p of data.people) if (["activo", "pausado"].includes(p.status) && puedeAnotar(ctx, p.id) && !nombreK.has(p.id)) nombreK.set(p.id, { nombre: p.full_name, pid: p.id });
+  const claves = verTodos ? [...nombreK.keys()] : [...new Set(actP.map(clave))];
+  const filas = claves.map((k) => {
+    const a = actP.filter((i) => clave(i) === k), ins = a.filter((i) => !esKudos(i));
+    const porMes = new Map(); for (const i of ins) porMes.set(mesDe(i.occurred_on), (porMes.get(mesDe(i.occurred_on)) ?? 0) + 1);
+    return { k, ...nombreK.get(k), n: ins.length, crit: ins.filter((i) => i.severity === "critica").length, auto: ins.filter((i) => i.source === "bamboo").length,
+      kudos: a.filter(esKudos).length, mesesSobre: [...porMes.values()].filter((n) => n >= lim).length,
+      d: prevP ? ins.length - prevP.filter((i) => clave(i) === k && !esKudos(i)).length : null };
+  }).filter((f) => f.nombre).sort((a, b) => b.n - a.n || b.crit - a.crit || b.kudos - a.kudos || a.nombre.localeCompare(b.nombre));
+  const sinReg = verTodos ? filas.filter((f) => !f.n && !f.kudos).length : 0;
+
+  // Gráfico: meses (o semanas en "Esta semana")
+  const mesesData = [...new Set(incs.map((i) => mesDe(i.occurred_on)))].sort();
+  let cols;
+  if (periodo === "semana") {
+    cols = Array.from({ length: 8 }, (_, k) => { const ini = sumar(lunesDe(hoy), -7 * (7 - k)), fin = sumar(ini, 6);
+      const xs = incs.filter((i) => !i.voided && enP(i, ini, fin));
+      return { key: ini, label: fmtDate(ini).replace(/ \d{4}$/, ""), title: `${fmtDate(ini)} – ${fmtDate(fin)}`, inc: xs.filter((i) => !esKudos(i)).length, kud: xs.filter(esKudos).length }; });
+  } else {
+    const fin = periodo === "mes" ? (mes > hoy.slice(0, 7) ? hoy.slice(0, 7) : mes) : hoy.slice(0, 7);
+    const ini = periodo === "todo" ? (mesesData[0] && mesesData[0] < mesMas(fin, -23) ? mesMas(fin, -23) : (mesesData[0] ?? fin))
+      : periodo === "anio" ? hoy.slice(0, 4) + "-01" : mesMas(fin, -5);
+    cols = [];
+    for (let m = ini; m <= fin; m = mesMas(m, 1)) {
+      const xs = incs.filter((i) => !i.voided && mesDe(i.occurred_on) === m);
+      cols.push({ key: m, label: mesCorto(m), title: mesLargo(m), pick: m, inc: xs.filter((i) => !esKudos(i)).length, kud: xs.filter(esKudos).length });
+    }
+  }
+  const selCol = periodo === "mes" ? mes : periodo === "semana" ? lunesDe(hoy) : null;
+
+  const lista = delP.filter((i) => (verAnuladas || !i.voided)
+    && (tipo === "todas" || (tipo === "auto" ? i.source === "bamboo" : tipo === "kudos" ? esKudos(i) : !esKudos(i))))
+    .sort((a, b) => String(b.occurred_on).localeCompare(String(a.occurred_on)) || String(b.created_at).localeCompare(String(a.created_at)));
+  const meses = [...new Set([hoy.slice(0, 7), ...mesesData])].sort().reverse();
+  const sobre = periodo === "mes" ? filas.filter((f) => f.n >= lim).length : filas.filter((f) => f.mesesSobre > 0).length;
+  const nInc = actP.filter((i) => !esKudos(i)).length, nKud = actP.filter(esKudos).length;
+  const pInc = prevP ? prevP.filter((i) => !esKudos(i)).length : null, pKud = prevP ? prevP.filter(esKudos).length : null;
+  const vsTxt = { semana: t("vs semana anterior"), mes: t("vs mismo tramo del mes anterior"), tres: t("vs 3 meses anteriores"), anio: t("vs mismo tramo del año anterior") }[periodo];
+  const delta = (a, b) => (b === null ? "" : a - b > 0 ? ` (+${a - b})` : a - b < 0 ? ` (${a - b})` : " (=)");
+  const quienF = quien ? filas.find((f) => f.k === quien) ?? { k: quien, ...nombreK.get(quien) } : null;
+
+  return html`<section class="page inc-page">
     <header class="page-head"><div><h1>${t("Incidencias y kudos")}</h1>
       <p class="muted">${t("Registro para el coaching: lo que hay que mejorar y también lo que se hizo bien. Las incidencias de Bamboo se crean solas cada lunes a las 8:00. Nada se borra: se anula con motivo.")}</p></div>
       <div class="row"><button class="kudos-btn" onClick=${() => setNueva("kudos")}>+ ${t("Kudos")}</button><button class="primary" onClick=${() => setNueva("incidencia")}>+ ${t("Incidencia")}</button></div></header>
     ${nuevasIds.size > 0 && html`<p class="inc-new-note small"><span class="pill new-pill">${t("Nueva")}</span> ${nuevasIds.size === 1 ? t("1 registro nuevo desde tu última visita.") : t("{n} registros nuevos desde tu última visita.", { n: nuevasIds.size })}</p>`}
-    <div class="row hb-bar">
-      <select class="mini" value=${mes} onChange=${(e) => setMes(e.target.value)} aria-label=${t("Mes")}>${meses.map((m) => html`<option value=${m}>${m}</option>`)}</select>
-      <div class="seg">${[["todas", t("Todas")], ["manual", t("Incidencias")], ["kudos", t("Kudos")], ["auto", t("Bamboo")]].map(([k, l]) => html`<button class=${soloAuto === k ? "on" : ""} onClick=${() => setSoloAuto(k)}>${l}</button>`)}</div>
-      <label class="check small"><input type="checkbox" checked=${verAnuladas} onChange=${(e) => setVerAnuladas(e.target.checked)} />${t("Ver anuladas ({n})", { n: anuladas })}</label>
+
+    <div class="row hb-bar periodo-bar">
+      <div class="seg" role="tablist" aria-label=${t("Período")}>${[["semana", t("Esta semana")], ["mes", t("Mes")], ["tres", t("Últimos 3 meses")], ["anio", t("Este año")], ["todo", t("Todo el historial")]].map(([k, l]) =>
+        html`<button role="tab" aria-selected=${periodo === k} class=${periodo === k ? "on" : ""} onClick=${() => setP(k)}>${l}</button>`)}</div>
+      ${periodo === "mes" && html`<select class="mini" value=${mes} onChange=${(e) => setMes(e.target.value)} aria-label=${t("Mes")}>${meses.map((m) => html`<option value=${m}>${mesLargo(m)}</option>`)}</select>`}
+      <span class="small muted">${periodo === "todo" ? t("Desde el primer registro") : `${fmtDate(r.ini)} – ${fmtDate(r.fin)}`}</span>
     </div>
+
     <div class="pulse">
-      <span class="pulse-item"><strong>${delMes.filter((i) => !i.voided && !esKudos(i)).length}</strong> ${t("incidencias en el mes")}</span>
-      <span class="pulse-item kudos-pulse"><strong>${delMes.filter((i) => !i.voided && esKudos(i)).length}</strong> ${t("kudos en el mes")}</span>
-      <span class=${"pulse-item" + (sobre.length ? " alert" : "")}><strong>${sobre.length}</strong> ${t("personas con {n} o más (umbral)", { n: lim })}</span>
-      <span class="pulse-item"><strong>${delMes.filter((i) => !i.voided && !esKudos(i) && i.severity === "critica").length}</strong> ${t("críticas")}</span>
-      <span class="pulse-item"><strong>${anuladas}</strong> ${t("anuladas")}</span>
+      <span class="pulse-item"><strong>${nInc}</strong> ${nInc === 1 ? t("incidencia") : t("incidencias")}${pInc !== null ? html` <span class="small muted" title=${vsTxt}>${delta(nInc, pInc)}</span>` : ""}</span>
+      <span class="pulse-item kudos-pulse"><strong>${nKud}</strong> ${t("kudos")}${pKud !== null ? html` <span class="small muted" title=${vsTxt}>${delta(nKud, pKud)}</span>` : ""}</span>
+      ${(() => { const nc = actP.filter((i) => !esKudos(i) && i.severity === "critica").length; return html`<span class="pulse-item"><strong>${nc}</strong> ${nc === 1 ? t("crítica") : t("críticas")}</span>`; })()}
+      <span class=${"pulse-item" + (sobre ? " alert" : "")}><strong>${sobre}</strong> ${periodo === "mes" ? (sobre === 1 ? t("persona con {n} o más (umbral)", { n: lim }) : t("personas con {n} o más (umbral)", { n: lim })) : (sobre === 1 ? t("persona pasó el umbral algún mes") : t("personas que pasaron el umbral algún mes"))}</span>
     </div>
-    ${resumen.length > 0 && html`<table class="tbl inc-sum"><thead><tr><th>${t("Persona")}</th><th class="right">${t("En el mes")}</th><th class="right">${t("Críticas")}</th><th class="right">${t("Bamboo")}</th><th class="right">${t("Kudos")}</th><th></th></tr></thead>
-      <tbody>${resumen.map((r) => html`<tr key=${r.k} class=${quien === r.k ? "on" : ""} onClick=${() => setQuien(quien === r.k ? "" : r.k)}>
-        <td>${r.nombre}${r.n >= lim && html` <span class="pill hb-bad">${t("Umbral: hablar con la persona")}</span>`}</td>
-        <td class="right"><b>${r.n || "—"}</b></td><td class="right">${r.crit || "—"}</td><td class="right">${r.auto || "—"}</td><td class="right kudos-t">${r.kudos ? "★ " + r.kudos : "—"}</td>
-        <td class="right">${r.pid && puedeAnotar(ctx, r.pid) && html`<button class="link small" onClick=${(e) => { e.stopPropagation(); setQuien(r.k); }}>${t("Ver")}</button>`}</td></tr>`)}</tbody></table>`}
-    <h2 class="mt">${quien ? t("Registros de {n}", { n: resumen.find((r) => r.k === quien)?.nombre ?? "" }) : t("Todas las del mes")}${quien && html` <button class="link small" onClick=${() => setQuien("")}>${t("Ver todas")}</button>`}</h2>
-    ${filtradas.length ? html`<ul class="inc-list">${filtradas.map((i) => html`<${IncidentRow} inc=${i} key=${i.id} nueva=${nuevasIds.has(i.id)} />`)}</ul>` : html`<${Empty}>${t("No hay registros en este mes.")}<//>`}
+
+    <${GraficoMeses} cols=${cols} sel=${selCol} onPick=${(m) => { setMes(m); setP("mes"); }} />
+
+    <div class="row between mt"><h2>${t("Resumen del equipo")} <span class="small muted">${vsTxt ? "· " + t("tendencia {v}", { v: vsTxt }) : ""}</span></h2>
+      <label class="check small"><input type="checkbox" checked=${verTodos} onChange=${(e) => setVerTodos(e.target.checked)} />${t("Mostrar a todo el equipo (también sin registros)")}</label></div>
+    ${filas.length ? html`<div class="tbl-scroll"><table class="tbl inc-sum"><thead><tr><th>${t("Persona")}</th><th class="right">${t("Incidencias")}</th>${periodo !== "todo" && html`<th class="right">${t("Tendencia")}</th>`}<th class="right">${t("Críticas")}</th><th class="right">${t("Bamboo")}</th><th class="right">${t("Kudos")}</th><th></th></tr></thead>
+      <tbody>${filas.map((f) => html`<tr key=${f.k} class=${(quien === f.k ? "on" : "") + (!f.n && !f.kudos ? " cero" : "")} onClick=${() => setQuien(quien === f.k ? "" : f.k)}>
+        <td>${f.nombre}${periodo === "mes" ? f.n >= lim && html` <span class="pill hb-bad">${t("Umbral: hablar con la persona")}</span>` : f.mesesSobre > 0 && html` <span class="pill hb-warn">${f.mesesSobre === 1 ? t("1 mes sobre el umbral") : t("{n} meses sobre el umbral", { n: f.mesesSobre })}</span>`}</td>
+        <td class="right"><b>${f.n || "—"}</b></td>${periodo !== "todo" && html`<td class="right"><${Tendencia} d=${f.d} /></td>`}<td class="right">${f.crit || "—"}</td><td class="right">${f.auto || "—"}</td>
+        <td class="right kudos-t">${f.kudos ? "★ " + f.kudos : "—"}</td>
+        <td class="right"><button class="link small" onClick=${(e) => { e.stopPropagation(); setQuien(f.k); }}>${t("Historial")}</button></td></tr>`)}</tbody></table></div>
+      ${sinReg > 0 && html`<p class="small muted">${t("{n} personas sin registros en este período.", { n: sinReg })}</p>`}`
+      : html`<${Empty}>${t("No hay registros en este período.")}<//>`}
+
+    ${quienF ? html`<${HistorialPersona} k=${quienF.k} nombre=${quienF.nombre ?? "—"} incs=${incs} rango=${r} onClose=${() => setQuien("")} />`
+      : html`<section class="mt">
+        <div class="row between"><h2>${t("Registros del período")}</h2>
+          <div class="row"><div class="seg">${[["todas", t("Todas")], ["manual", t("Incidencias")], ["kudos", t("Kudos")], ["auto", t("Bamboo")]].map(([k, l]) => html`<button class=${tipo === k ? "on" : ""} aria-pressed=${tipo === k} onClick=${() => setTipo(k)}>${l}</button>`)}</div>
+          <label class="check small"><input type="checkbox" checked=${verAnuladas} onChange=${(e) => setVerAnuladas(e.target.checked)} />${t("Ver anuladas ({n})", { n: delP.filter((i) => i.voided).length })}</label></div></div>
+        ${lista.length ? html`<ul class="inc-list">${lista.slice(0, limite).map((i) => html`<${IncidentRow} inc=${i} key=${i.id} nueva=${nuevasIds.has(i.id)} />`)}</ul>
+          ${lista.length > limite && html`<button class="link small" onClick=${() => setLimite(limite + 60)}>${t("Ver más ({n} restantes)", { n: lista.length - limite })}</button>`}`
+          : html`<${Empty}>${t("No hay registros en este período.")}<//>`}
+      </section>`}
+
     ${mias.length > 0 && html`<section class="block mt inc-mias">
       <h2>${t("Mis incidencias y kudos")} <span class="small muted">· ${t("solo lectura")}</span></h2>
       <p class="muted small">${t("Las registraron sobre ti. Si algo no está bien, háblalo con tu líder o con Gus.")}</p>
