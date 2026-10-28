@@ -1,5 +1,5 @@
 import { h, render, createContext } from "preact";
-import { useState, useEffect, useContext, useMemo, useCallback } from "preact/hooks";
+import { useState, useEffect, useContext, useMemo, useCallback, useErrorBoundary } from "preact/hooks";
 import htm from "htm";
 import { EN } from "./i18n.js";
 import { deServidor, pareceEspanol } from "./traduce.js";
@@ -71,9 +71,19 @@ export const TxCat = ({ c }) => {
   const v = useTx(k ? null : c);
   return k ? t(k) : v ?? "";
 };
+/** Lo mismo sin componente (para textos armados, como la campana). */
+export const txCat = (c) => { const k = c && (EN[c] ? c : EN_NORM.get(sinTilde(c))); return k ? t(k) : txAhora(c) ?? ""; };
+/** Vuelve a dibujar cuando llegan traducciones (para textos armados con txAhora). */
+export function useTxRefresh() {
+  const [, setN] = useState(0);
+  useEffect(() => { const f = () => setN((n) => n + 1); txSubs.add(f); return () => txSubs.delete(f); }, []);
+}
+// En inglés, "1 incidents" → "1 incident" (los textos con número se arman igual para 1 y para varios)
+const SINGULAR = { incidents: "incident", months: "month", agreements: "agreement", logins: "login", days: "day", items: "item", holidays: "holiday", people: "person", groups: "group", words: "word", notes: "note", tasks: "task", ideas: "idea", meetings: "meeting" };
+const unoEn = (x) => x.replace(/(^|[^\d.,])1 (incidents|months|agreements|logins|days|items|holidays|people|groups|words|notes|tasks|ideas|meetings)\b/g, (_, a, w) => `${a}1 ${SINGULAR[w]}`);
 export const t = (s, vars) => {
   let out = LANG === "en" ? EN[s] ?? s : s;
-  if (vars) for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v);
+  if (vars) { for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v); if (LANG === "en") out = unoEn(out); }
   return out;
 };
 
@@ -140,7 +150,7 @@ function Toasts() {
     setTimeout(() => setItems((x) => x.filter((i) => i.id !== id)), 4500);
   };
   return html`<div class="toasts" role="status" aria-live="polite">
-    ${items.map((x) => html`<div class=${"toast " + x.kind} key=${x.id}>${x.text}</div>`)}
+    ${items.map((x) => html`<div class=${"toast " + x.kind} key=${x.id}>${srv(x.text)}</div>`)}
   </div>`;
 }
 export const toast = (x, k) => pushToast(k === "bad" ? srv(x) : x, k);
@@ -638,13 +648,13 @@ function AddTask({ person, onClose }) {
     <form class="stack" onSubmit=${save}>
       <label>${t("Tarea")}<input autoFocus value=${body} onInput=${(e) => setBody(e.target.value)} placeholder=${t("Ej.: preparar la demo del checklist para el viernes")} /></label>
       <div class="row">
-        <label class="grow">${t("A cargo de")}<select value=${owner} onChange=${(e) => setOwner(e.target.value)}>${opciones.map(([v, l]) => html`<option value=${v}>${l}</option>`)}</select></label>
+        <label class="grow">${t("A cargo de")}<select value=${owner} onChange=${(e) => setOwner(e.target.value)}>${opciones.map(([v, l]) => html`<option value=${v} disabled=${priv && v === person.id}>${l}</option>`)}</select></label>
         <label>${t("Fecha límite")}<input type="date" value=${due} onInput=${(e) => setDue(e.target.value)} /></label>
       </div>
       <div><span class="lbl">${t("Prioridad")}</span>
         <div class="seg">${PRIORITIES.map((x) => html`<button type="button" class=${prio === x ? "on" : ""} aria-pressed=${prio === x} onClick=${() => setPrio(x)}>${t(x)}</button>`)}</div></div>
-      ${isAdmin && html`<label class="check"><input type="checkbox" checked=${priv} onChange=${(e) => setPriv(e.target.checked)} /> ${t("Solo para mí (el lead no la ve)")}</label>`}
-      <p class="small muted">${owner === person.id ? t("{n} la verá en Mis pendientes y podrá marcarla y comentarla.", { n: firstName(person.full_name) }) : t("Queda en el perfil de {n} y en tus pendientes.", { n: firstName(person.full_name) })}</p>
+      ${isAdmin && html`<label class="check"><input type="checkbox" checked=${priv} onChange=${(e) => { setPriv(e.target.checked); if (e.target.checked && owner === person.id) setOwner("gus"); }} /> ${t("Solo para mí (el lead no la ve)")}</label>`}
+      <p class="small muted">${priv ? t("Solo tú la ves.") : owner === person.id ? t("{n} la verá en Mis pendientes y podrá marcarla y comentarla.", { n: firstName(person.full_name) }) : owner === "gus" && !isAdmin ? t("Queda en el perfil de {n} y en los pendientes de Gus.", { n: firstName(person.full_name) }) : t("Queda en el perfil de {n} y en tus pendientes.", { n: firstName(person.full_name) })}</p>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${t("Agregar tarea")}</button></div>
     </form>
   <//>`;
@@ -917,7 +927,7 @@ function IdeasModal({ person, onClose, history }) {
   return html`<${Modal} title=${t("Nuevas ideas para {n}", { n: firstName(person.full_name) })} onClose=${onClose}>
     <form class="stack" onSubmit=${run}>
       <p class="muted">${t("La IA revisa su historial y lo que ya funcionó o no, y propone 3 métodos. Quedan como propuestas hasta que las valides.")}</p>
-      ${previas.length > 0 && html`<div class="ai-prev"><h3>${t("Ya generado con IA")}</h3>${previas.slice(0, 5).map((g) => html`<p class="small"><span class="pill ai-pill">IA</span> <b>${fmtCuando(g.created_at)}</b> · ${g.created_by_name ?? "—"}${g.result?.focus ? ` · ${t("enfoque")}: ${g.result.focus}` : ""}<br /><span class="muted">${(g.result?.titles ?? []).join(" · ")}</span></p>`)}</div>`}
+      ${previas.length > 0 && html`<div class="ai-prev"><h3>${t("Ya generado con IA")}</h3>${previas.slice(0, 5).map((g) => html`<p class="small"><span class="pill ai-pill">IA</span> <b>${fmtCuando(g.created_at)}</b> · ${g.created_by_name ?? "—"}${g.result?.focus ? ` · ${t("enfoque")}: ${txAhora(g.result.focus)}` : ""}<br /><span class="muted">${(g.result?.titles ?? []).map(txAhora).join(" · ")}</span></p>`)}</div>`}
       <label>${t("¿En qué quieres enfocarte? (opcional)")}<input value=${focus} onInput=${(e) => setFocus(e.target.value)} placeholder=${t("Ej.: que pregunte con toda la info")} /></label>
       <div class="row end"><button type="button" onClick=${onClose}>${t("Cancelar")}</button><button class="primary" disabled=${busy}>${busy ? t("Pensando…") : t("Proponer ideas")}</button></div>
     </form>
@@ -970,7 +980,7 @@ function PersonView({ id }) {
         <h1>${p.full_name}${p.nickname ? html` <span class="nick">${p.nickname}</span>` : ""}</h1>
         <p class="muted">${[p.title, g?.name].filter(Boolean).join(", ")}${p.status !== "activo" ? ` (${t(p.status)})` : ""}</p>
         ${p.focus && html`<p class="small"><${Tx} s=${p.focus} /></p>`}
-        ${p.notes && isAdmin && html`<p class="small muted">${p.notes}</p>`}
+        ${p.notes && isAdmin && html`<p class="small muted"><${Tx} s=${p.notes} /></p>`}
       </div>
       <div class="head-actions">
         <button class="primary" onClick=${() => go("#/preparar/" + p.id)}>${t("Preparar reunión")}</button>
@@ -1020,7 +1030,7 @@ function PersonView({ id }) {
 
       <section class="col">
         <h2>${t("Siguiente")}</h2>
-        ${lastWithTopics && html`<h3>${t("Para retomar")}</h3><ul class="plain">${lastWithTopics.analysis.next_meeting_topics.map((x) => html`<li>${x}</li>`)}</ul>`}
+        ${lastWithTopics && html`<h3>${t("Para retomar")}</h3><ul class="plain">${lastWithTopics.analysis.next_meeting_topics.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ul>`}
         <h3 class=${lastWithTopics ? "mt" : ""}>${t("Plan de mejora")}</h3>
         ${next.length ? next.map((x) => html`<${SuggestionCard} s=${x} compact key=${x.id} />`) : html`<${Empty}>${isAdmin ? t("Pide ideas con IA o analiza una reunión para armar su plan.") : t("Todavía no hay métodos compartidos para esta persona.")}<//>`}
         ${sugg.filter((x) => x.outcome).length > 0 && html`<details class="mt"><summary>${t("Resultados anteriores")}</summary>${sugg.filter((x) => x.outcome && x.status !== "en uso").map((x) => html`<${SuggestionCard} s=${x} compact key=${x.id} />`)}</details>`}
@@ -1050,7 +1060,7 @@ function CoachCard({ c, onDecide, busy }) {
     </header>
     <h3><${Tx} s=${c.title} /></h3>
     ${c.why && html`<p class="why"><${Tx} s=${c.why} /></p>`}
-    ${c.steps?.length > 0 && html`<ol class="steps">${c.steps.map((x) => html`<li>${x}</li>`)}</ol>`}
+    ${c.steps?.length > 0 && html`<ol class="steps">${c.steps.map((x) => html`<li><${Tx} s=${x} /></li>`)}</ol>`}
     ${c.first_step && html`<p class="first"><strong>${t("Esta semana")}:</strong> <${Tx} s=${c.first_step} /></p>`}
     ${c.say_it && html`<p class="quote">“<${Tx} s=${c.say_it} />”</p>`}
     ${c.measure && html`<p class="small muted"><strong>${t("Cómo saber si funcionó")}:</strong> <${Tx} s=${c.measure} /></p>`}
@@ -1404,7 +1414,7 @@ function Review({ id }) {
       ${updates.map((u, i) => {
         const s = data.suggestions.find((x) => x.id === u.suggestion_id);
         return html`<label class="check rv-up" key=${i}><input type="checkbox" checked=${u.keep} onChange=${(e) => setUpdates(updates.map((x, j) => (j === i ? { ...x, keep: e.target.checked } : x)))} />
-          <span><strong>${s?.title}</strong> (${idx.person(s?.person_id)?.full_name}): <b>${t(u.outcome)}</b>. ${u.comment}</span></label>`;
+          <span><strong><${Tx} s=${s?.title} /></strong> (${idx.person(s?.person_id)?.full_name}): <b>${t(u.outcome)}</b>. <${Tx} s=${u.comment} /></span></label>`;
       })}
     </section>`}
 
@@ -1421,9 +1431,9 @@ function Review({ id }) {
       ${visibleSugg.length > 0 && html`<h2 class="mt">${t("Métodos por persona")}</h2>
         <p class="small muted">${isAdmin ? t("Decide cuáles se comparten con el líder.") : t("Decide cuáles guardas en el plan de cada persona.")}</p>
         ${visibleSugg.map(({ p, i }) => p.suggestions.map((sg, k) => html`<article class=${"coach method" + (sg.decision === "descartar" ? " off" : "")} key=${i + "-" + k}>
-          <header><span class="for">${t("Para")}: ${nameOf(p)}</span>${sg.category && html`<span class="small muted">${t(sg.category)}</span>`}</header>
-          <h3>${sg.title}</h3>
-          ${sg.why && html`<p class="why">${sg.why}</p>`}
+          <header><span class="for">${t("Para")}: ${nameOf(p)}</span>${sg.category && html`<span class="small muted"><${TxCat} c=${sg.category} /></span>`}</header>
+          <h3><${Tx} s=${sg.title} /></h3>
+          ${sg.why && html`<p class="why"><${Tx} s=${sg.why} /></p>`}
           <label class="small">${t("Pasos")}<textarea rows="4" value=${sg.how} onInput=${(e) => upS(i, k, { how: e.target.value })}></textarea></label>
           ${sg.resources && html`<p class="small muted">${sg.resources}</p>`}
           <select value=${sg.decision} onChange=${(e) => upS(i, k, { decision: e.target.value })} aria-label=${t("Decisión")}>
@@ -1511,7 +1521,7 @@ function ReviewItem({ it, meeting, onChange }) {
         <label class="check small"><input type="checkbox" checked=${it.private} onChange=${(e) => onChange({ private: e.target.checked })} /> ${t("privada")}</label>
       </div>
       ${it.type === "suggestion"
-        ? html`<strong>${it.title}</strong><p class="small muted">${it.why}</p><textarea rows="2" value=${it.how ?? ""} onInput=${(e) => onChange({ how: e.target.value })}></textarea>`
+        ? html`<strong><${Tx} s=${it.title} /></strong><p class="small muted"><${Tx} s=${it.why} /></p><textarea rows="2" value=${it.how ?? ""} onInput=${(e) => onChange({ how: e.target.value })}></textarea>`
         : html`<textarea rows="2" value=${it.body} onInput=${(e) => onChange({ body: e.target.value })}></textarea>`}
     </div>
   </div>`;
@@ -1627,16 +1637,16 @@ function IdeaCard({ idea }) {
       ${idea.description && html`<p><${Tx} s=${idea.description} /></p>`}
       ${idea.raised_by && html`<p class="small muted">${t("Lo planteó")}: ${idea.raised_by}</p>`}
       ${busy ? html`<${Busy} label=${t("La IA está buscando soluciones…")} />` : sol && html`<div class="sol">
-        <p class="lede">${sol.diagnosis}</p>
-        ${sol.quick_win && html`<p class="quick"><strong>${t("Esta semana")}:</strong> ${sol.quick_win}</p>`}
+        <p class="lede"><${Tx} s=${sol.diagnosis} /></p>
+        ${sol.quick_win && html`<p class="quick"><strong>${t("Esta semana")}:</strong> <${Tx} s=${sol.quick_win} /></p>`}
         <div class="opts">${(sol.options ?? []).map((o) => html`<div class="opt">
           <strong><${Tx} s=${o.title} /></strong>
           <span class="small muted">${t("Esfuerzo")}: ${t(o.effort)}, ${t("impacto")}: ${t(o.impact)}, ${t(HORIZON[o.horizon] ?? o.horizon)}</span>
           <p><${Tx} s=${o.description} /></p>
-          ${o.steps?.length > 0 && html`<ol>${o.steps.map((s) => html`<li>${s}</li>`)}</ol>`}
+          ${o.steps?.length > 0 && html`<ol>${o.steps.map((s) => html`<li><${Tx} s=${s} /></li>`)}</ol>`}
         </div>`)}</div>
-        ${sol.questions?.length > 0 && html`<p class="small"><strong>${t("Falta saber")}:</strong> ${sol.questions.join(" / ")}</p>`}
-        ${sol.related?.length > 0 && html`<p class="small muted">${t("Relacionadas")}: ${sol.related.join(", ")}</p>`}
+        ${sol.questions?.length > 0 && html`<p class="small"><strong>${t("Falta saber")}:</strong> ${sol.questions.map(txAhora).join(" / ")}</p>`}
+        ${sol.related?.length > 0 && html`<p class="small muted">${t("Relacionadas")}: ${sol.related.map(txAhora).join(", ")}</p>`}
       </div>`}
       <div class="row">
         <button class="primary" disabled=${busy} onClick=${ask}>${sol ? t("Buscar otras soluciones") : t("Buscar soluciones con IA")}</button>
@@ -1814,11 +1824,11 @@ export function campana(ctx) {
   const kud = todasNuevas.filter(esKudos);
   if (kud.length) grupos.push({ k: "kud", href: "#/incidencias", titulo: t("Kudos nuevos"),
     items: kud.map((i) => ({ id: "k" + i.id, kudos: true, meta: (esMia(ctx, i) && !isAdmin ? t("Para ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on) + " · " + t("de {p}", { p: srv(i.created_by_name) ?? "—" }),
-      txt: t(i.category) + (i.note ? " — " + txAhora(i.note) : ""), when: new Date(i.created_at).getTime() })) });
+      txt: txCat(i.category) + (i.note ? " — " + txAhora(i.note) : ""), when: new Date(i.created_at).getTime() })) });
   const incs = todasNuevas.filter((i) => !esKudos(i));
   if (incs.length) grupos.push({ k: "inc", href: "#/incidencias", titulo: t("Incidencias nuevas"),
     items: incs.map((i) => ({ id: "i" + i.id, meta: (esMia(ctx, i) && !isAdmin ? t("Sobre ti") : nombreDe(ctx, i)) + " · " + fmtDate(i.occurred_on),
-      txt: t(i.category) + (i.note || i.detail ? " — " + (txAhora(i.note) || srv(i.detail)) : ""), when: new Date(i.created_at).getTime() })) });
+      txt: txCat(i.category) + (i.note || i.detail ? " — " + (txAhora(i.note) || srv(i.detail)) : ""), when: new Date(i.created_at).getTime() })) });
   // 2) Mis pendientes vencidos o que vencen en 2 días
   const mio = (a) => (me?.person_id ? a.owner_id === me.person_id : false) || (isAdmin && !a.owner_id);
   const pend = data.actions.filter((a) => OPEN.includes(a.status) && a.due_date && mio(a) && daysUntil(a.due_date) <= 2)
@@ -1891,6 +1901,16 @@ function Campana() {
   </div>`;
 }
 
+// Cambio 25: si una pantalla falla, se muestra un aviso en esa pantalla (el menú y lo demás siguen andando)
+function Seguro({ k, children }) {
+  const [error, reset] = useErrorBoundary((e) => console.error("Team Coach:", e));
+  useEffect(() => { if (error) reset(); }, [k]);
+  if (error) return html`<section class="page"><div class="aviso-card"><h2>${t("Algo falló en esta pantalla")}</h2>
+    <p class="muted">${t("El resto de Team Coach sigue funcionando. Prueba recargar; si se repite, avísale a Gus.")}</p>
+    <button class="primary" onClick=${() => location.reload()}>${t("Recargar")}</button></div></section>`;
+  return children;
+}
+
 function Shell({ api, session, onLang }) {
   const [data, setData] = useState(null);
   const [err, setErr] = useState("");
@@ -1899,11 +1919,19 @@ function Shell({ api, session, onLang }) {
   const [seen, setSeen] = useState(null);   // "visto" local (Cambio 19), se sincroniza con user_seen
   const [hecha, setHecha] = useState(null); // Cambio 20: tarea recién completada → ofrecer comentario
   const route = useRoute();
+  useTxRefresh(); // Cambio 24: los textos armados con txAhora (campana, tooltips) se actualizan al llegar la traducción
 
   const reload = useCallback(async () => {
     try { setData(await api.loadAll()); } catch (x) { setErr(srv(x.message)); }
   }, []);
   useEffect(() => { reload(); }, []);
+  // Cambio 25: al volver a la pestaña después de un rato, trae lo nuevo (lo que cargaron otros líderes o Gus)
+  useEffect(() => {
+    let ultimo = Date.now();
+    const f = () => { if (document.visibilityState === "visible" && Date.now() - ultimo > 5 * 60000) { ultimo = Date.now(); reload(); } };
+    document.addEventListener("visibilitychange", f);
+    return () => document.removeEventListener("visibilitychange", f);
+  }, []);
   // Cambio 13: Bamboo se carga aparte (si falla, el resto de la app sigue igual)
   const [bamboo, setBamboo] = useState(null);
   const meRole = data?.profiles.find((p) => p.id === session.user.id)?.role;
@@ -2000,7 +2028,7 @@ function Shell({ api, session, onLang }) {
           <button class="link small" onClick=${() => api.signOut()}>${t("Salir")}</button>
         </div>
       </aside>
-      <main class="main">${page ?? html`<section class="page"><${Empty}>${t("No tienes acceso a esta sección.")}<//></section>`}</main>
+      <main class="main"><${Seguro} k=${location.hash}>${page ?? html`<section class="page"><${Empty}>${t("No tienes acceso a esta sección.")}<//></section>`}<//></main>
     </div>
     ${pwModal && html`<${ChangePassword} onClose=${() => setPwModal(false)} />`}
     ${hecha && html`<${AlCompletar} a=${hecha} onClose=${() => setHecha(null)} />`}

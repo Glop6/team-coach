@@ -20,6 +20,11 @@ const pais = (p) => PAIS[p] ?? p;
 // Frases fijas que arma el servidor (en orden: las más largas primero)
 const REGLAS = [
   // Errores de la base y de las funciones
+  // Registro de cambios de Reglas (lo arma la base al cambiar ciudad o mover un feriado)
+  [/^Vuelve a la ciudad por defecto \(antes (.+)\)$/, (_, c) => `Back to the default city (was ${c})`],
+  [/^Ciudad: (.+)$/, (_, c) => `City: ${c}`],
+  [/^Quitó el cambio de feriado (\d\d\/\d\d) → (\d\d\/\d\d)$/, (_, a, b) => `Removed the holiday change ${a} → ${b}`],
+  [/^Feriado (\d\d\/\d\d) movido al (\d\d\/\d\d)(.*)$/, (_, a, b, n) => `Holiday ${a} moved to ${b}${n}`],
   [/^La ciudad "(.+)" no tiene feriado cargado para este país\.$/, (_, c) => `The city "${c}" has no holiday loaded for this country.`],
   [/^El (\d{4}-\d{2}-\d{2}) no es feriado en el país de esta persona\.$/, (_, d) => `${d} is not a holiday in this person's country.`],
   [/^No encontré a "(.+)" en los datos de Bamboo\..*$/, (_, n) => `Couldn't find "${n}" in the Bamboo data. Update from Bamboo and check how the name is spelled.`],
