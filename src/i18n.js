@@ -1,5 +1,13 @@
 // Traducciones al inglés (Cambio 6). La clave es el texto en español.
 export const EN = {
+  "Escribe la tarea.": "Write the task.",
+  "Tarea agregada": "Task added",
+  "Yo ({n})": "Me ({n})",
+  "Tarea para {n}": "Task for {n}",
+  "Ej.: preparar la demo del checklist para el viernes": "E.g.: prepare the checklist demo for Friday",
+  "{n} la verá en Mis pendientes y podrá marcarla y comentarla.": "{n} will see it in My follow-ups and can check it off and comment.",
+  "Queda en el perfil de {n} y en tus pendientes.": "It stays on {n}'s profile and in your follow-ups.",
+  "Agregar tarea": "Add task",
   "1 incidencia": "1 incident",
   "persona con {n} o más (umbral)": "person with {n} or more (threshold)",
   "persona pasó el umbral algún mes": "person passed the threshold in some month",

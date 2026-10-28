@@ -7,7 +7,7 @@
 import { h } from "preact";
 import { useState, useMemo } from "preact/hooks";
 import htm from "htm";
-import { useApp, t, toast, Modal, Empty, Busy, PersonLink, getLang, srv } from "./app.js";
+import { useApp, t, toast, Modal, Empty, Busy, PersonLink, getLang, srv, Tx, txAhora } from "./app.js";
 
 const html = htm.bind(h);
 
@@ -84,7 +84,7 @@ function tooltip(d) {
   const partes = [`${larga(d.day)}: ${t("{a}h de {b}h", { a: fmtH(d.hours), b: fmtH(d.expected) })} — ${t(ESTADO_TXT[st] ?? st)}`];
   if (d.reason) partes.push(srv(d.reason));
   for (const [p, hh] of Object.entries(d.other_projects ?? {})) partes.push(t("Proyecto adicional (no cuenta): {p} {h}h", { p, h: fmtH(hh) }));
-  if (d.note) partes.push(`${t("Comentario")}: “${d.note}”`);
+  if (d.note) partes.push(`${t("Comentario")}: “${txAhora(d.note)}”`);
   if (d.ai) partes.push(`IA: ${d.ai}`);
   if (d.forzado) partes.push(t("Cuenta como pendiente porque estás verificando el mes completo."));
   if (d.before_state) partes.push(t("Antes: {s} ({h}h, visto {f})", { s: t(ESTADO_TXT[d.before_state.state] ?? d.before_state.state), h: fmtH(d.before_state.hours ?? 0), f: d.before_state.seen ? mini(d.before_state.seen) : "—" }));
@@ -395,9 +395,9 @@ function Fila({ e, r, cols, ix, modo, pasados, corte }) {
     </tr>
     ${open && html`<tr class="hb-detail"><td colspan=${cols.length + 4}>
       <div class="hb-det">
-        ${obs.map((o) => html`<p class=${"hb-o " + o.tipo}><span class="pill">${t(o.fuente)}${o.fuente === "IA" && o._f.length ? " · " + o._f.filter((f) => enRango.has(f)).map(mini).join(", ") : ""}</span> ${srv(o.texto)}</p>`)}
+        ${obs.map((o) => html`<p class=${"hb-o " + o.tipo}><span class="pill">${t(o.fuente)}${o.fuente === "IA" && o._f.length ? " · " + o._f.filter((f) => enRango.has(f)).map(mini).join(", ") : ""}</span> <${Tx} s=${srv(o.texto)} /></p>`)}
         ${corr.map((d) => html`<p class="hb-o info"><span class="pill">${t("Corregido")}</span> ${t("{d}: antes {s} ({h}h, visto {f}); ahora {a}.", { d: mini(d.day), s: t(ESTADO_TXT[d.before_state.state] ?? ""), h: fmtH(d.before_state.hours ?? 0), f: d.before_state.seen ? mini(d.before_state.seen) : "—", a: t(ESTADO_TXT[estado(d)] ?? "") })}</p>`)}
-        ${notas.length > 0 && html`<div><h4 class="small">${t("Comentarios")}</h4>${notas.map((d) => html`<p class="small"><b>${mini(d.day)}</b> ${d.note}</p>`)}</div>`}
+        ${notas.length > 0 && html`<div><h4 class="small">${t("Comentarios")}</h4>${notas.map((d) => html`<p class="small"><b>${mini(d.day)}</b> <${Tx} s=${d.note} /></p>`)}</div>`}
         ${Object.keys(adic).length > 0 && html`<p class="small"><b>${t("Otros proyectos (no cuentan):")}</b> ${Object.entries(adic).map(([p, v]) => `${p} ${fmtH(v)}h`).join(" · ")}</p>`}
         ${!obs.length && !notas.length && !corr.length && !Object.keys(adic).length && html`<p class="small muted">${t("Sin observaciones en este período.")}</p>`}
         ${persona && html`<p class="small"><a href=${"#/persona/" + persona.id} onClick=${(ev) => ev.stopPropagation()}>${t("Ver perfil en Team Coach")} →</a></p>`}
@@ -1021,7 +1021,7 @@ export function MisHoras() {
         <span class="small">${t("{a}h de {b}h", { a: fmtH(x.hours), b: fmtH(x.expected) })}</span>${x.reason && html`<span class="small muted">· ${srv(x.reason)}</span>`}</li>`; })}</ul>
       <p class="small muted">${t("Complétalos en Bamboo; se actualiza solo durante el día.")}</p></section>`}
     ${conNota.length > 0 && html`<section class="block"><h2>${t("Días con comentarios")}</h2>
-      <ul class="dias-list">${conNota.map((x) => html`<li key=${x.day}><button type="button" class="link" onClick=${() => setSel(x.day)}>${larga(x.day)}</button><span class="small muted">${x.note ? `“${x.note}”` : srv(x.reason)}</span></li>`)}</ul></section>`}
+      <ul class="dias-list">${conNota.map((x) => html`<li key=${x.day}><button type="button" class="link" onClick=${() => setSel(x.day)}>${larga(x.day)}</button><span class="small muted">${x.note ? html`“<${Tx} s=${x.note} />”` : srv(x.reason)}</span></li>`)}</ul></section>`}
     ${fer.length > 0 && html`<section class="block"><h2>${t("Feriados del mes")}</h2>
       <ul class="dias-list">${fer.map((f) => html`<li key=${f.day}><span>${larga(f.movida?.new_day ?? f.day)}</span><span class="small muted">${f.name}${f.region ? ` · ${f.region}` : ""}${f.movida ? ` · ${t("movido del {d}", { d: mini(f.day) })}` : ""}${Number(f.fraction) < 1 ? ` · ${t("medio día")}` : ""}</span></li>`)}</ul></section>`}
     `}
