@@ -274,6 +274,13 @@ function Cargando({ perf }) {
 // ---------------------------------------------------------------------
 // Nivel 1: Inicio (admin). Un líder entra directo a su grupo (o elige si lidera varios).
 // ---------------------------------------------------------------------
+// El dashboard (detalle, comparativas y subida de datos): admin y líderes. Allí cada líder ve solo su grupo.
+function EnlaceDashboard() {
+  const { isMember } = useApp();
+  if (isMember || !PERF_DASHBOARD_URL) return null;
+  return html`<a class="btn" href=${PERF_DASHBOARD_URL} target="_blank" rel="noopener">${t("Comparativas (vistas actuales)")} →</a>`;
+}
+
 export function RendimientoInicio() {
   const r = usarRendimiento();
   const { modelo, isAdmin, isMember, misGrupos, activos, miembros, perf, data, idx } = r;
@@ -292,7 +299,7 @@ export function RendimientoInicio() {
   return html`<section class="page">
     <header class="page-head"><div><h1>${t("Rendimiento")}</h1>
       <p class="muted">${isAdmin ? t("Todo el equipo, {m}.", { m: mesLargo(meses[sel]) }) : t("Tus grupos, {m}.", { m: mesLargo(meses[sel]) })}</p></div>
-      ${isAdmin && PERF_DASHBOARD_URL && html`<a class="btn" href=${PERF_DASHBOARD_URL} target="_blank" rel="noopener">${t("Comparativas (vistas actuales)")} →</a>`}</header>
+      <${EnlaceDashboard} /></header>
     <${SelectorMes} meses=${meses} sel=${sel} onSel=${setSel} />
     ${isAdmin && html`
       <${Kpis} s=${todos} meses=${meses} i=${sel} color="var(--primary)" cuarto=${html`<${Kpi} etiqueta=${t("Personas con casos")} valor=${nf(activos.filter((p) => p.cases[sel] > 0).length)} debajo=${t("en el mes")} />`} />
@@ -331,7 +338,8 @@ export function RendimientoGrupo({ id }) {
   const migas = isAdmin || misGrupos.length > 1 ? [[t("Rendimiento"), "#/rendimiento"], [g.name]] : [[g.name]];
   return html`<section class="page" style=${`--c:${g.color}`}>
     <${Migas} partes=${migas} />
-    <header class="page-head"><div><h1>${g.name}</h1><p class="muted">${t("Totales del grupo. Sin rankings: la lista va por nombre y la tendencia de cada persona es contra su propio historial.")}</p></div></header>
+    <header class="page-head"><div><h1>${g.name}</h1><p class="muted">${t("Totales del grupo. Sin rankings: la lista va por nombre y la tendencia de cada persona es contra su propio historial.")}</p></div>
+      <${EnlaceDashboard} /></header>
     <${SelectorMes} meses=${meses} sel=${sel} onSel=${setSel} />
     <${Kpis} s=${s} meses=${meses} i=${sel} color=${g.color} cuarto=${html`<${Kpi} etiqueta=${t("Personas con casos")} valor=${nf(mem.filter((p) => p.cases[sel] > 0).length)} debajo=${t("de {n} en el grupo", { n: mem.length })} />`} />
     <div class="rd-grid2">
