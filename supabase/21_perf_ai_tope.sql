@@ -30,9 +30,9 @@ grant execute on function perf.ai_gasto(uuid) to service_role;
 -- Topes por defecto, en dólares. El admin los puede cambiar con un update de esta fila.
 -- El total diario y el mensual aplican a todos (también al admin); los topes por persona, a todos menos al admin.
 insert into perf.app_settings (key, value) values ('ai_limits', jsonb_build_object(
-  'dia_total_usd', 5,
-  'mes_total_usd', 30,
-  'dia_persona_usd', 1,
-  'mes_persona_usd', 10,
+  'dia_total_usd', 1,
+  'mes_total_usd', 10,
+  'dia_persona_usd', 0.25,
+  'mes_persona_usd', 2,
   'llamadas_dia_persona', 150
 )) on conflict (key) do nothing;

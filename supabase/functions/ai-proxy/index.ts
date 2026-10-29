@@ -42,7 +42,7 @@ const FEATURES: Record<string, { model: string; maxTokens: number; fallback: "ow
   coaching_note:       { model: SONNET, maxTokens: 2000, fallback: "owner" },
 };
 const MAX_PROMPT_CHARS = 30000;
-const LIMITES_POR_DEFECTO = { dia_total_usd: 5, mes_total_usd: 30, dia_persona_usd: 1, mes_persona_usd: 10, llamadas_dia_persona: 150 };
+const LIMITES_POR_DEFECTO = { dia_total_usd: 1, mes_total_usd: 10, dia_persona_usd: 0.25, mes_persona_usd: 2, llamadas_dia_persona: 150 };
 
 const costo = (model: string, entrada: number, salida: number) => {
   const p = PRICES[model];
