@@ -304,7 +304,9 @@ create policy batches_write on perf.upload_batches for all to authenticated
   using (perf.can_upload()) with check (perf.can_upload());
 
 drop policy if exists qa_categories_select on perf.qa_categories;
-create policy qa_categories_select on perf.qa_categories for select to authenticated using (perf.my_role() is not null);
+-- La clave de cada categoría incluye el nombre de la persona y el caso: se ve solo si se puede ver ese QA
+create policy qa_categories_select on perf.qa_categories for select to authenticated
+  using (perf.can_upload() or exists (select 1 from perf.qa_records q where q.dedup_key = qa_categories.dedup_key));
 drop policy if exists qa_categories_write on perf.qa_categories;
 create policy qa_categories_write on perf.qa_categories for all to authenticated
   using (perf.can_upload()) with check (perf.can_upload());
