@@ -184,6 +184,14 @@ language sql stable security definer set search_path = '' as $$
   )
 $$;
 
+-- Las personas que la sesión puede ver, calculadas una sola vez por consulta. Las policies de casos y QA
+-- la usan como `person_id = any (array(...))`: así Postgres no evalúa los permisos fila por fila
+-- (con can_see_person(person_id) por fila, contar los casos de una persona tardaba 13 s).
+create or replace function perf.visible_person_ids() returns setof uuid
+language sql stable security definer set search_path = '' as $$
+  select x.id from perf.people x where perf.can_see_person(x.id)
+$$;
+
 -- ---------------------------------------------------------------------
 -- Funciones del dashboard (mismos nombres que hoy, para cambiar lo mínimo)
 -- ---------------------------------------------------------------------
@@ -268,60 +276,60 @@ alter table perf.ai_usage       enable row level security;
 
 drop policy if exists people_select on perf.people;
 create policy people_select on perf.people for select to authenticated
-  using (perf.can_see_person(id) or perf.can_upload());
+  using ((select perf.can_upload()) or id = any (array(select perf.visible_person_ids())));
 drop policy if exists people_admin on perf.people;
 create policy people_admin on perf.people for all to authenticated
-  using (perf.is_owner()) with check (perf.is_owner());
+  using ((select perf.is_owner())) with check ((select perf.is_owner()));
 
 drop policy if exists uploaders_select on perf.uploaders;
 create policy uploaders_select on perf.uploaders for select to authenticated
-  using (user_id = auth.uid() or perf.is_owner());
+  using (user_id = auth.uid() or (select perf.is_owner()));
 drop policy if exists uploaders_admin on perf.uploaders;
 create policy uploaders_admin on perf.uploaders for all to authenticated
-  using (perf.is_owner()) with check (perf.is_owner());
+  using ((select perf.is_owner())) with check ((select perf.is_owner()));
 
 -- Casos y QA: el líder ve los de su gente; los casos sin persona y los ex-miembros, solo admin y uploaders.
 -- Un uploader puede leer todo porque la carga de Excel necesita detectar duplicados contra todos los casos;
 -- en su vista de líder la app le muestra solo su grupo (decisión 2026-10-29).
 drop policy if exists records_select on perf.records;
 create policy records_select on perf.records for select to authenticated
-  using ((select perf.can_upload()) or perf.can_see_person(person_id));
+  using ((select perf.can_upload()) or person_id = any (array(select perf.visible_person_ids())));
 drop policy if exists records_write on perf.records;
 create policy records_write on perf.records for all to authenticated
   using ((select perf.can_upload())) with check ((select perf.can_upload()));
 
 drop policy if exists qa_select on perf.qa_records;
 create policy qa_select on perf.qa_records for select to authenticated
-  using ((select perf.can_upload()) or perf.can_see_person(person_id));
+  using ((select perf.can_upload()) or person_id = any (array(select perf.visible_person_ids())));
 drop policy if exists qa_write on perf.qa_records;
 create policy qa_write on perf.qa_records for all to authenticated
   using ((select perf.can_upload())) with check ((select perf.can_upload()));
 
 drop policy if exists batches_select on perf.upload_batches;
-create policy batches_select on perf.upload_batches for select to authenticated using (perf.can_upload());
+create policy batches_select on perf.upload_batches for select to authenticated using ((select perf.can_upload()));
 drop policy if exists batches_write on perf.upload_batches;
 create policy batches_write on perf.upload_batches for all to authenticated
-  using (perf.can_upload()) with check (perf.can_upload());
+  using ((select perf.can_upload())) with check ((select perf.can_upload()));
 
 drop policy if exists qa_categories_select on perf.qa_categories;
 -- La clave de cada categoría incluye el nombre de la persona y el caso: se ve solo si se puede ver ese QA
 create policy qa_categories_select on perf.qa_categories for select to authenticated
-  using (perf.can_upload() or exists (select 1 from perf.qa_records q where q.dedup_key = qa_categories.dedup_key));
+  using ((select perf.can_upload()) or exists (select 1 from perf.qa_records q where q.dedup_key = qa_categories.dedup_key));
 drop policy if exists qa_categories_write on perf.qa_categories;
 create policy qa_categories_write on perf.qa_categories for all to authenticated
-  using (perf.can_upload()) with check (perf.can_upload());
+  using ((select perf.can_upload())) with check ((select perf.can_upload()));
 
 drop policy if exists settings_select on perf.app_settings;
-create policy settings_select on perf.app_settings for select to authenticated using (perf.is_lead_or_owner());
+create policy settings_select on perf.app_settings for select to authenticated using ((select perf.is_lead_or_owner()));
 drop policy if exists settings_write on perf.app_settings;
 create policy settings_write on perf.app_settings for all to authenticated
-  using (perf.is_owner()) with check (perf.is_owner());
+  using ((select perf.is_owner())) with check ((select perf.is_owner()));
 
 drop policy if exists epoch_select on perf.data_epoch;
-create policy epoch_select on perf.data_epoch for select to authenticated using (perf.my_role() is not null);
+create policy epoch_select on perf.data_epoch for select to authenticated using ((select perf.my_role()) is not null);
 
 drop policy if exists ai_usage_select on perf.ai_usage;
-create policy ai_usage_select on perf.ai_usage for select to authenticated using (perf.is_owner());
+create policy ai_usage_select on perf.ai_usage for select to authenticated using ((select perf.is_owner()));
 
 revoke all on all tables    in schema perf from public, anon;
 revoke all on all sequences in schema perf from public, anon;
