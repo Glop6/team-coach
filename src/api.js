@@ -102,6 +102,30 @@ export function createApi() {
         return { available: false, error: e.message };
       }
     },
+    // Cambio 28: rendimiento (datos del Performance Dashboard en el schema perf). Resúmenes por persona y mes
+    // calculados en la base (20_perf_resumen.sql); cada uno recibe solo lo que puede ver. Sin el SQL, no aparece.
+    async loadPerf({ desde, desdeHorario }) {
+      const pf = sb.schema("perf");
+      const todo = async (q) => {           // pagina de a 1000 filas (límite de la API)
+        const out = [];
+        for (let i = 0; ; i += 1000) {
+          const data = check(await q().range(i, i + 999));
+          out.push(...(data ?? []));
+          if (!data || data.length < 1000) return out;
+        }
+      };
+      try {
+        const [people, casos, qa, horario] = await Promise.all([
+          todo(() => pf.from("people").select("id, full_name, active, tc_person_id").order("id")),
+          todo(() => pf.rpc("resumen_casos", { p_desde: desde }).order("person_id").order("mes").order("proyecto")),
+          todo(() => pf.rpc("resumen_qa", { p_desde: desde }).order("person_id").order("mes")),
+          todo(() => pf.rpc("resumen_horario", { p_desde: desdeHorario }).order("person_id").order("hora").order("dia")),
+        ]);
+        return { available: true, people, casos, qa, horario };
+      } catch (e) {
+        return { available: false, error: e.message };
+      }
+    },
     async syncBamboo() {
       const { data, error } = await sb.functions.invoke("bamboo-sync", { body: { source: "boton" } });
       if (error) {

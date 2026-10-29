@@ -7,6 +7,7 @@ import { organize, TEMPLATE_ONE, TEMPLATE_GROUP } from "./organize.js";
 import { HorasView, ReglasView, BambooPersonBlock, MisHoras, MiDesarrollo } from "./bamboo.js";
 import { IncidenciasView, IncidenciasPersona, conteoMes, umbral, nuevas, vistoDesde, esMia, nombreDe, esKudos } from "./incidencias.js";
 import { MiEspacio, MisIncidencias, MisReuniones, MisPendientes, MisNotas } from "./persona.js";
+import { RendimientoInicio, RendimientoGrupo, RendimientoPersona, hayRendimiento, rangoPerf } from "./rendimiento.js";
 
 const html = htm.bind(h);
 const Ctx = createContext(null);
@@ -1912,6 +1913,13 @@ function Shell({ api, session, onLang }) {
     setBamboo(await api.loadBamboo({ admin: meRole === "admin", member: meRole === "member" }));
   }, [meRole]);
   useEffect(() => { if (data) reloadBamboo(); }, [!!data, meRole]);
+  // Cambio 28: rendimiento (perf). Se carga aparte; sin el SQL 19/20 la sección no aparece.
+  const [perf, setPerf] = useState(null);
+  useEffect(() => {
+    if (!data || !meRole) return;
+    if (!api.loadPerf) { setPerf({ available: false, error: "demo" }); return; }
+    api.loadPerf(rangoPerf()).then(setPerf);
+  }, [!!data, meRole]);
   useEffect(() => setMenu(false), [route.page, route.id]);
   const idx = useMemo(() => (data ? buildIdx(data) : null), [data]);
   const me = data?.profiles.find((p) => p.id === session.user.id);
@@ -1944,7 +1952,8 @@ function Shell({ api, session, onLang }) {
     api.markSeen(kind).catch(() => {});
   };
   setTxApi(api);
-  const ctx = { api, data, reload, idx, me: profile, isAdmin, isMember, session, reviewsPending, bamboo, reloadBamboo, seen: seenRows, markSeen, alCompletar: setHecha };
+  const ctx = { api, data, reload, idx, me: profile, isAdmin, isMember, session, reviewsPending, bamboo, reloadBamboo, perf, seen: seenRows, markSeen, alCompletar: setHecha };
+  const conRendimiento = hayRendimiento(ctx);
   const incNuevas = data.incidents_error ? 0 : nuevas(ctx).length;
   const setLang = async (l) => { onLang(l); try { await api.rpc("set_lang", { l }); } catch (_) {} };
 
@@ -1952,7 +1961,8 @@ function Shell({ api, session, onLang }) {
   if (isMember) {
     // Cambio 20b: la persona del equipo navega solo por lo suyo
     page = { horas: html`<${MisHoras} />`, incidencias: html`<${MisIncidencias} />`, reuniones: html`<${MisReuniones} />`,
-      pendientes: html`<${MisPendientes} />`, desarrollo: html`<${MiDesarrollo} />`, notas: html`<${MisNotas} />` }[route.page] ?? html`<${MiEspacio} />`;
+      pendientes: html`<${MisPendientes} />`, desarrollo: html`<${MiDesarrollo} />`, notas: html`<${MisNotas} />`,
+      rendimiento: conRendimiento ? html`<${RendimientoInicio} />` : null }[route.page] ?? html`<${MiEspacio} />`;
   } else switch (route.page) {
     case "persona": page = html`<${PersonView} id=${route.id} key=${route.id} />`; break;
     case "reuniones": page = html`<${MeetingsView} />`; break;
@@ -1967,19 +1977,24 @@ function Shell({ api, session, onLang }) {
     case "incidencias": page = html`<${IncidenciasView} />`; break;
     case "preparar": page = html`<${PrepPage} id=${route.id} key=${route.id} />`; break;
     case "reglas": page = html`<${ReglasView} />`; break;
+    case "rendimiento": page = html`<${RendimientoInicio} />`; break;
+    case "rendimiento-grupo": page = html`<${RendimientoGrupo} id=${route.id} key=${route.id} />`; break;
+    case "rendimiento-persona": page = html`<${RendimientoPersona} id=${route.id} key=${route.id} />`; break;
     default: page = html`<${TeamView} />`;
   }
   const nav = isMember ? [["mi", t("Mi espacio"), null], ["horas", t("Mis horas"), null], ["incidencias", t("Incidencias y kudos"), incNuevas || null],
-    ["reuniones", t("Mis reuniones"), null], ["pendientes", t("Mis pendientes"), lateCount || null], ["desarrollo", t("Mi desarrollo"), null], ["notas", t("Notas de mi líder"), null]] : [
+    ["reuniones", t("Mis reuniones"), null], ["pendientes", t("Mis pendientes"), lateCount || null], ["desarrollo", t("Mi desarrollo"), null], ["notas", t("Notas de mi líder"), null],
+    ...(conRendimiento ? [["rendimiento", t("Mi rendimiento"), null]] : [])] : [
     ["equipo", t("Equipo"), null],
     ["horas", t("Horas"), null],
+    ...(conRendimiento ? [["rendimiento", t("Rendimiento"), null]] : []),
     ["incidencias", t("Incidencias y kudos"), incNuevas || null],
     ["reuniones", t("Reuniones"), null],
     ["pendientes", t("Pendientes"), lateCount || null],
     ["ideas", t("Banco de ideas"), null],
     ...(isAdmin ? [["validar", t("Por revisar"), toReview || null], ["accesos", t("Accesos"), null], ["reglas", t("Reglas"), null]] : [["reglas", t("Feriados"), null]]),
   ];
-  const active = isMember ? (["horas", "incidencias", "reuniones", "pendientes", "desarrollo", "notas"].includes(route.page) ? route.page : "mi") : { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo" }[route.page] ?? route.page;
+  const active = isMember ? (["horas", "incidencias", "reuniones", "pendientes", "desarrollo", "notas", "rendimiento"].includes(route.page) ? route.page : "mi") : { persona: "equipo", reunion: "reuniones", revisar: "reuniones", preparar: "equipo", "rendimiento-grupo": "rendimiento", "rendimiento-persona": "rendimiento" }[route.page] ?? route.page;
 
   return html`<${Ctx.Provider} value=${ctx}>
     <div class="shell">
