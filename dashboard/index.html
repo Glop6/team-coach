@@ -5542,12 +5542,13 @@ async function setupAi(){
 }
 
 // Team lists (groups, assignments, aliases...) live in perf.app_settings, not in this file:
-// the file is public, the names are not. Only leads/owner can read them (RLS).
+// the file is public, the names are not. The database returns them in full to the owner and uploaders;
+// any other lead gets only the entries of their own people (perf.team_config_mio, SQL 22).
 async function loadTeamConfig(){
   if(ME.role === 'contractor') return;
-  const { data, error } = await sb.from('app_settings').select('value').eq('key', 'team_config').maybeSingle();
+  const { data, error } = await sb.rpc('team_config_mio');
   if(error){ console.error('Team settings not loaded', error); return; }
-  const c = (data && data.value) || {};
+  const c = data || {};
   EXCLUDED_NAMES = new Set(c.excludedNames || []);
   ASSIGNMENTS = c.assignments || {};
   TEAM_GROUPS = c.teamGroups || {};

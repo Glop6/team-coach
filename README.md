@@ -42,6 +42,7 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
    | `19_perf_dashboard.sql` | 26 · esquema `perf` (vacío) | 2026-10-29 |
    | `20_perf_resumen.sql` | 28 · resúmenes de rendimiento | 2026-10-29 |
    | `21_perf_ai_tope.sql` | 29 · topes de costo de la IA | 2026-10-29 |
+   | `22_perf_config_lider.sql` | 32 · un líder recibe solo la configuración de su gente | 2026-11-03 |
 
 3. **Exponer el esquema `perf`** en la API (Settings → API → Exposed schemas).
 4. **Cargar los datos del dashboard** en `perf`: `supabase/carga/LEEME.md`. Los ajustes con nombres del equipo (`app_settings.team_config`) están en un SQL privado.
