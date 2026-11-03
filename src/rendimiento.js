@@ -101,6 +101,7 @@ function construirModelo(perf, data, bamboo) {
 function seriesEquipos(perf, personas, iMes) {
   if (!perf.equipos) return null;
   const rep = crearReparto(perf.equipos);
+  for (const p of personas.values()) p.equipo = rep.persona(p.clave);   // equipo dedicado (para la etiqueta de las tarjetas de grupo)
   const eqs = Object.fromEntries(EQUIPOS.map((k) => [k, { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), gente: cero().map(() => new Set()) }]));
   for (const r of perf.casos) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
@@ -373,10 +374,13 @@ export function RendimientoInicio() {
     <h2 class="mt">${t("Grupos")}</h2>
     <div class="rd-gcards">${grupos.map((g) => {
       const mem = miembros(g.id), s = serie(mem), cc = mem.some((p) => p.conCasos);
+      // SEO y Copywriters cuentan tareas; un grupo con gente de los dos lados, casos y tareas
+      const dedicados = mem.filter((p) => p.conCasos && (p.equipo === "seo" || p.equipo === "cw")).length, conCasos = mem.filter((p) => p.conCasos).length;
+      const unidad = !dedicados ? t("casos") : dedicados === conCasos ? t("tareas") : t("casos y tareas");
       return html`<a class="rd-gcard" style=${`--c:${g.color}`} href=${"#/rendimiento-grupo/" + g.id} key=${g.id}><span class="rd-gcard-st"></span><span class="rd-gcard-in">
         <strong class="rd-gcard-h">${g.name}</strong>
         <span class="small muted">${lideres(g.id).join(" · ") || t("Reportan directo a Gus")} · ${mem.length === 1 ? t("1 persona") : t("{n} personas", { n: mem.length })}</span>
-        ${cc ? html`<span class="rd-gcard-n"><span><b>${nf(s.cases[sel])}</b><span class="small muted">${t("casos")} · ${nf(hrs(s.loe[sel]))} h</span><span class="small">${vsAnterior(s.cases[sel], s.cases[sel - 1], meses[sel - 1])}</span></span><${Linea} vals=${s.cases.slice(0, sel + 1)} color=${g.color} ancho=${120} /></span>`
+        ${cc ? html`<span class="rd-gcard-n"><span><b>${nf(s.cases[sel])}</b><span class="small muted">${unidad} · ${nf(hrs(s.loe[sel]))} h</span><span class="small">${vsAnterior(s.cases[sel], s.cases[sel - 1], meses[sel - 1])}</span></span><${Linea} vals=${s.cases.slice(0, sel + 1)} color=${g.color} ancho=${120} /></span>`
           : html`<span class="small muted rd-gcard-vacio">${t("Sin casos en el dashboard")}</span>`}
       </span></a>`;
     })}</div>

@@ -1040,6 +1040,7 @@ export const EN = {
   "{n} casos en 12 meses": "{n} cases in 12 months",
   // Cambio 33: Rendimiento del admin por equipo (Primary / SEO / Copywriters)
   "tareas": "tasks",
+  "casos y tareas": "cases and tasks",
   "Sin QA": "No QA",
   "{p}% errores en QA": "{p}% QA errors",
   "Casos por mes, Primary": "Cases per month, Primary",
