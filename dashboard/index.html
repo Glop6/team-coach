@@ -149,7 +149,10 @@
   body:not([data-role="owner"]):not([data-role="snapshot"]) #exportSnapshotBtn,
   body:not([data-role="owner"]):not([data-role="snapshot"]) #clearAllDataBtn{display:none !important;}
   body[data-role="snapshot"] #exportSnapshotBtn{display:none !important;}
-  @media print{ #authRoot, #userChip, #githubImportBtn{display:none !important;} }
+  /* Team Coach: Settings solo para el admin; Files Loaded solo para quien puede subir datos */
+  body:not([data-role="owner"]):not([data-role="snapshot"]) .tab[data-tab="settings"],
+  body:not([data-can-upload="1"]) .tab[data-tab="archivos"]{display:none !important;}
+  @media print{ #authRoot, #userChip{display:none !important;} }
 
   #printHeader{ display:none; }
   @media print{
@@ -289,7 +292,6 @@ tbody tr:hover td{background:#FAFBFD;}
   </div>
   <div style="display:flex; gap:8px; align-items:center;">
     <div id="userChip"></div>
-    <button class="btn" id="githubImportBtn" style="display:none;" title="One-time import of the Excel files stored in the GitHub repo">Import from GitHub</button>
     <button class="btn" id="exportBtn" style="display:none;">Export to Excel</button>
     <button class="btn" id="exportPdfBtn" style="display:none;">Export PDF</button>
     <button class="btn" id="exportSnapshotBtn" style="display:none;">Export to share</button>
@@ -1372,16 +1374,6 @@ async function commitImport(){
   });
   pendingImport = null;
 
-  // Only now — with the data actually applied to STORE — mark any GitHub-sourced
-  // files from this import as "seen", so a reload without confirming won't skip them.
-  if(pendingGithubFiles && pendingGithubFiles.length){
-    const seen = GITHUB_AUTOLOAD_SEEN || {};
-    pendingGithubFiles.forEach(({entry, folder})=>{ seen[`${folder}/${entry.name}`] = entry.sha; });
-    GITHUB_AUTOLOAD_SEEN = seen;
-    try{ localStorage.setItem('githubAutoloadSeen', JSON.stringify(seen)); }catch(e){}
-    pendingGithubFiles = null;
-  }
-
   persistAll(!!ME).then(()=>{ if(ME) showSaveNotice('Saved to the shared database.', false); });
   closeModal();
   renderApp();
@@ -1954,6 +1946,8 @@ document.getElementById('tabs').addEventListener('click', e=>{
 function renderTabContent(){
   const container = document.getElementById('tabContent');
   const filtered = applyFilters(allRecords());
+  // Team Coach: pestañas ocultas para este rol (ver los estilos de data-role / data-can-upload)
+  if(ME && ((currentTab==='settings' && ME.role!=='owner') || (currentTab==='archivos' && !ME.canUpload))) currentTab = 'resumen';
   if(currentTab==='resumen') container.innerHTML = renderResumen(filtered);
   else if(currentTab==='proyectos'){ container.innerHTML = renderProyectos(filtered); if(!drillProject) wireSortableTable('proyectos', renderTabContent); }
   else if(currentTab==='personas'){ container.innerHTML = renderPersonas(filtered); if(!drillPerson) wireSortableTable('personas', renderTabContent); }
@@ -2951,6 +2945,7 @@ function renderCapacidad(filtered){
 
 function renderIndividualBreakdownCard(filtered){
   const data = buildIndividualBreakdown(filtered, capIndivState.months);
+  if(!data && ME && ME.role !== 'owner') return ''; // Team Coach: sin datos en su alcance, la sección no se muestra
   const body = !data ? '<p class="muted" style="font-size:12.5px;">No data for this filter.</p>' : (()=>{
     const cardFor = (key)=>{
       const p = data.perPerson[key];
@@ -3662,11 +3657,15 @@ function resolveMonthlyMonth(){
   const avail = availableMonthlyMonths();
   if(!avail.length) return null;
   if(monthlyMeetingState.monthKey && avail.includes(monthlyMeetingState.monthKey)) return monthlyMeetingState.monthKey;
+  // Team Coach: por defecto no se elige un mes con muy pocos casos (menos del 10% del mes más alto,
+  // por ejemplo casos sueltos del mes siguiente). Sigue en la lista para elegirlo a mano.
+  const cnt = {};
+  allRecords().forEach(r=>{ if(r.date && isCounted(r) && !r.isQueue){ const k = monthKeyOf(r.date); cnt[k] = (cnt[k]||0) + 1; } });
+  const max = Math.max(...Object.values(cnt));
+  const llenos = avail.filter(k=>cnt[k] >= max*0.1);
   const calPrev = prevCalendarMonthKey();       // viewing in Nov -> shows Oct
-  if(avail.includes(calPrev)) return calPrev;
-  const latest = avail[0];
-  const prev = monthKeyMinus1(latest);
-  return avail.includes(prev) ? prev : latest;
+  if(llenos.includes(calPrev)) return calPrev;
+  return llenos[0];                              // el último mes con datos suficientes
 }
 
 function monthlyEligiblePeople(list){
@@ -5322,100 +5321,6 @@ document.getElementById('exportSnapshotBtn').addEventListener('click', ()=>{
   }
 });
 
-/* =====================================================================
-   AUTO-LOAD DATA FILES FROM GITHUB (datos/<month>/ folders in this repo)
-   Uses the public, unauthenticated GitHub REST API — works because this
-   repo is public. Runs once on page load, reuses the exact same parsing
-   and preview-confirmation flow as a manual drag-and-drop upload, so
-   nothing about the parsing/dedup/quality-check logic is duplicated.
-===================================================================== */
-// Fill these in once the repo exists — see README for exact values.
-const GITHUB_AUTOLOAD = {
-  enabled: true,
-  owner: 'gustavolopez-spec',
-  repo: 'coderoad-performance-dashboard',
-  branch: 'main',
-  dataPath: 'datos'   // folder containing one subfolder per month/period, any name works (e.g. 'Historicos', 'Agosto 2026', 'Septiembre 2026'...)
-};
-
-async function fetchGithubJson(url){
-  const res = await fetch(url, { headers: { 'Accept': 'application/vnd.github+json' } });
-  if(!res.ok) throw new Error(`GitHub API error ${res.status} for ${url}`);
-  return res.json();
-}
-
-async function listGithubMonthFolders(){
-  const { owner, repo, branch, dataPath } = GITHUB_AUTOLOAD;
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${dataPath}?ref=${branch}`;
-  const entries = await fetchGithubJson(url);
-  return entries.filter(e=>e.type==='dir').map(e=>e.name);
-}
-
-async function listGithubFilesInFolder(folderName){
-  const { owner, repo, branch, dataPath } = GITHUB_AUTOLOAD;
-  const url = `https://api.github.com/repos/${owner}/${repo}/contents/${dataPath}/${encodeURIComponent(folderName)}?ref=${branch}`;
-  const entries = await fetchGithubJson(url);
-  return entries.filter(e=>e.type==='file' && /\.(xlsx|xls)$/i.test(e.name));
-}
-
-async function downloadGithubFileAsFile(fileEntry, folderName){
-  // download_url is the raw file content, no auth needed for a public repo.
-  const res = await fetch(fileEntry.download_url);
-  if(!res.ok) throw new Error(`Could not download ${fileEntry.path}`);
-  const blob = await res.blob();
-  // Wrap with the month folder in the name so it's traceable in the file summary/log.
-  return new File([blob], `${folderName}/${fileEntry.name}`, { type: blob.type });
-}
-
-async function autoLoadFromGithub(){
-  if(!GITHUB_AUTOLOAD.enabled) return;
-  showImportProgress('Checking GitHub for new data files…');
-  try{
-    const folders = await listGithubMonthFolders();
-    const allFiles = [];
-    for(const folder of folders){
-      const entries = await listGithubFilesInFolder(folder);
-      for(const entry of entries){
-        allFiles.push({ entry, folder });
-      }
-    }
-    if(!allFiles.length){ hideImportProgress(); return; }
-
-    // Skip files already fully accounted for: compare by (folder/filename + GitHub's
-    // content sha) against what we recorded on the last successful load, so re-opening
-    // the dashboard without any new upload doesn't re-download or re-open the preview.
-    const seen = GITHUB_AUTOLOAD_SEEN || {};
-    const toFetch = allFiles.filter(({entry, folder})=> seen[`${folder}/${entry.name}`] !== entry.sha);
-    if(!toFetch.length){ hideImportProgress(); return; }
-
-    showImportProgress(`Downloading ${toFetch.length} file(s) from GitHub…`);
-    const files = [];
-    for(const {entry, folder} of toFetch){
-      showImportProgress(`Downloading ${folder}/${entry.name}…`);
-      files.push(await downloadGithubFileAsFile(entry, folder));
-    }
-    hideImportProgress();
-
-    // Remember which GitHub files this run is offering, so commitImport can mark them
-    // "seen" only once you actually confirm — not just because the preview opened.
-    // Until you hit Confirm, reloading will offer these same files again instead of
-    // silently treating unconfirmed data as already loaded.
-    pendingGithubFiles = toFetch;
-
-    // Feed straight into the normal upload pipeline — same parsing, same dedup,
-    // same quality checks, same preview-and-confirm modal as a manual drag-and-drop.
-    await handleFiles(files);
-  }catch(err){
-    hideImportProgress();
-    console.warn('GitHub auto-load skipped:', err.message);
-  }
-}
-
-let GITHUB_AUTOLOAD_SEEN = (()=>{
-  try{ return JSON.parse(localStorage.getItem('githubAutoloadSeen') || '{}'); }
-  catch(e){ return {}; }
-})();
-let pendingGithubFiles = null; // files offered by the current autoLoadFromGithub run, marked "seen" only on confirm
 
 /* =====================================================================
    UPLOAD EVENTS
@@ -5536,9 +5441,12 @@ async function startApp(user){
     if(pe) throw pe;
     if(!prof){ await denyAccess('Your account is not set up yet. Contact Gus.'); return; }
     if(prof.disabled){ await denyAccess('Your account is inactive. Contact Gus.'); return; }
-    if(prof.must_change_password){ await denyAccess('Set your own password in Team Coach first, then come back.'); return; }
+    // Sin cerrar la sesión: es la misma de Team Coach, donde se crea la contraseña propia
+    if(prof.must_change_password){ goToTeamCoach('Set your own password in Team Coach first, then come back.'); return; }
     const [{ data: role }, { data: canUp }, { data: pid }] = await Promise.all([sb.rpc('my_role'), sb.rpc('can_upload'), sb.rpc('current_person_id')]);
     if(!role){ await denyAccess('Your account is not set up for this panel yet. Contact Gus.'); return; }
+    // Team Coach: las personas del equipo ven su rendimiento en Team Coach, no aquí. Sin cerrar la sesión (es la misma de Team Coach).
+    if(role === 'contractor'){ goToTeamCoach('Your performance is in Team Coach, under <strong>My performance</strong>.'); return; }
     let person = null;
     if(pid){ const r = await sb.from('people').select('id, full_name, email').eq('id', pid).maybeSingle(); person = r.data; }
     ME = { userId: user.id, personId: person ? person.id : null, fullName: person ? person.full_name : (user.email || ''),
@@ -5659,6 +5567,11 @@ async function loadTeamConfig(){
   COPYWRITERS_EXCLUDE = new Set(c.copywritersExclude || []);
 }
 
+// Team Coach: aviso con enlace a Team Coach, sin cerrar la sesión (la comparten)
+function goToTeamCoach(msgHtml){
+  authCard(`${AUTH_BRAND}<p style="font-size:13.5px; line-height:1.5; margin:4px 0 16px;">${msgHtml}</p>
+    <a class="btn primary" href="../" style="display:block; text-align:center; text-decoration:none;">Open Team Coach</a>`);
+}
 async function denyAccess(msg){
   try{ await sb.auth.signOut(); }catch(e){}
   showLogin(msg);
@@ -5695,7 +5608,6 @@ function applyRoleUi(){
   chip.style.display = 'flex';
   document.getElementById('signOutBtn').onclick = signOutAndReload;
   document.getElementById('loadHistoryBtn').onclick = ()=>window.ensureDataFrom(null);
-  document.getElementById('githubImportBtn').style.display = ME.role === 'owner' ? 'inline-block' : 'none';
   if(!ME.canUpload){
     const dz = document.getElementById('dropZone');
     dz.innerHTML = '<h2>No data available yet</h2><p>An administrator will upload the monthly data. Check back soon.</p>';
@@ -6010,14 +5922,6 @@ async function refreshSyncEpochAfterOwnChange(){
     await writeSyncMeta({ ...(meta || {}), epoch, lastSync: (meta && meta.lastSync) || new Date().toISOString() });
   }catch(e){}
 }
-
-/* ---------- one-time import of the Excel files stored in GitHub (owner only) ---------- */
-document.getElementById('githubImportBtn').addEventListener('click', async ()=>{
-  if(!ME || ME.role !== 'owner') return;
-  if(!confirm('Read every Excel file in the GitHub repo (datos/ folder) and save them to the shared database?\n\nYou will see a preview before anything is saved.')) return;
-  GITHUB_AUTOLOAD_SEEN = {};
-  await autoLoadFromGithub();
-});
 
 /* =====================================================================
    INIT
