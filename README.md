@@ -19,7 +19,7 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
 
 ## Recrear la base desde cero
 
-1. **Base de Team Coach (01 a 05):** estos archivos no están en el repo porque incluyen datos del equipo (están en `.gitignore`). Se restauran desde el respaldo más reciente (ver *Respaldos*) o desde la copia privada de esos archivos.
+1. **Base de Team Coach (01 a 05):** estos archivos no están en el repo porque incluyen datos del equipo (están en `.gitignore`). La copia privada está en `~/Backups/supabase/AAAA-MM-DD/sql_privados/`, junto con `06b`. Los datos de `02_seed.sql` son los del primer día; para tener la base al día, se restaura el respaldo más reciente (ver *Respaldos*).
 2. **Ejecutar en el SQL Editor, en este orden** (todos se pueden volver a ejecutar sin romper nada):
 
    | Archivo | Cambio | Fecha |
@@ -56,6 +56,7 @@ Siempre fuera del repo, en una carpeta por fecha:
 ~/Backups/supabase/AAAA-MM-DD/
   team-coach.dump      respaldo completo (pg_dump, formato custom): esquema, datos y auth
   ref_*.csv            números de referencia para comparar después de una migración
+  sql_privados/        los SQL con datos del equipo (01 a 05 y 06b)
 ```
 
 Los respaldos tienen datos personales y hashes de contraseñas: no se suben a ningún repo ni a la nube sin cifrar.
