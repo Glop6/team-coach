@@ -10,6 +10,8 @@
 //    create_user    (admin)  → crea el login de un colaborador
 //    reset_password (admin)  → cambia la contraseña de un colaborador
 //    create_users   (admin)  → crea en lote los logins del equipo (rol "member", deben cambiar la contraseña al entrar)
+//    reset_passwords (admin) → Cambio 31: contraseñas nuevas en lote para personas del equipo (rol "member"),
+//                              con cambio obligatorio al entrar
 //    set_access     (admin)  → desactiva o reactiva el login de alguien (por ejemplo, cuando sale de la empresa)
 //    translate      (todos)  → traduce al inglés textos que el usuario ya ve (con caché; no cambia el original)
 //  Las personas del equipo (rol "member") no pueden usar ninguna acción de esta función.
@@ -655,6 +657,22 @@ async function crearAcceso(admin: any, emailIn: string, passwordIn: string, pers
   return { ok: true, user_id: data.user.id, role };
 }
 
+// Cambio 31: contraseña nueva para una persona del equipo (solo rol "member"), con cambio obligatorio al entrar
+async function nuevaClaveMember(admin: any, userId: string, passwordIn: string) {
+  const password = passwordIn.trim();
+  if (password.length < 8) return { ok: false, error: "La contraseña debe tener al menos 8 caracteres." };
+  const { data: pr } = await admin.from("profiles").select("role, disabled").eq("id", userId).maybeSingle();
+  if (!pr || pr.role !== "member") return { ok: false, error: "Solo para personas del equipo (rol Persona)." };
+  if (pr.disabled) return { ok: false, error: "El acceso está desactivado." };
+  const { data: upd, error } = await admin.auth.admin.updateUserById(userId, { password, email_confirm: true });
+  if (error) return { ok: false, error: error.message };
+  const { error: pe } = await admin.from("profiles").update({ must_change_password: true }).eq("id", userId);
+  if (pe) return { ok: false, error: `La contraseña cambió, pero no se pudo pedir el cambio al entrar (${pe.message}).` };
+  const check = upd?.user?.email ? await probarLogin(upd.user.email, password) : null;
+  if (check) return { ok: false, error: `La contraseña no funciona al entrar: ${check}` };
+  return { ok: true, email: upd?.user?.email ?? null };
+}
+
 // ---------------------------------------------------------------------
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
@@ -716,6 +734,13 @@ Deno.serve(async (req) => {
         const r = await crearAcceso(admin, String(u.email ?? ""), String(u.password ?? ""), u.person_id ?? null, true);
         out.push({ person_id: u.person_id ?? null, email: String(u.email ?? "").trim().toLowerCase(), ...r });
       }
+      return json({ ok: true, results: out });
+    }
+
+    if (action === "reset_passwords") {
+      const lista = Array.isArray(body.users) ? body.users.slice(0, 25) : [];
+      const out: any[] = [];
+      for (const u of lista) out.push({ user_id: String(u.user_id ?? ""), ...(await nuevaClaveMember(admin, String(u.user_id ?? ""), String(u.password ?? ""))) });
       return json({ ok: true, results: out });
     }
 

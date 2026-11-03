@@ -10,7 +10,7 @@
 //  LOE en minutos; se muestra en horas.
 // =====================================================================
 import { h } from "preact";
-import { useState, useMemo } from "preact/hooks";
+import { useState, useMemo, useRef, useEffect } from "preact/hooks";
 import htm from "htm";
 import { useApp, t, getLang, Avatar, Empty, Busy, MEETING_KIND } from "./app.js";
 import { esKudos } from "./incidencias.js";
@@ -41,8 +41,12 @@ export function rangoPerf() {
 function construirModelo(perf, data, bamboo) {
   // "Ahora" = el último mes CERRADO con datos: el mes en curso siempre está incompleto
   // (los datos se suben una vez al mes, a mes vencido).
+  // Un mes con menos del 10% de los casos del mes más alto (por ejemplo, casos sueltos del mes siguiente) tampoco cuenta.
   const enCurso = mesDe(ymd(new Date()));
-  const conDatos = perf.casos.filter((r) => r.casos > 0 && r.mes < enCurso).map((r) => r.mes);
+  const porMes = new Map();
+  for (const r of perf.casos) if (r.casos > 0 && r.mes < enCurso) porMes.set(r.mes, (porMes.get(r.mes) ?? 0) + r.casos);
+  const tope = Math.max(0, ...porMes.values());
+  const conDatos = [...porMes].filter(([, n]) => n >= tope * 0.1).map(([m]) => m);
   if (!conDatos.length) return null;
   const ahora = conDatos.sort().at(-1);
   const meses = []; for (let i = N_MESES - 1; i >= 0; i--) { const d = fechaMes(ahora); meses.push(mesDe(ymd(new Date(d.getFullYear(), d.getMonth() - i, 1)))); }
@@ -145,10 +149,24 @@ export function hayRendimiento(ctx) {
 // ---------------------------------------------------------------------
 // Gráficos: una serie, SVG, sin librerías. El mes elegido se resalta; el detalle va en el tooltip.
 // ---------------------------------------------------------------------
-function Barras({ vals, meses, sel, color = "var(--primary)", fmt = (v) => nf(v), alto = 150, ancho = 640, eventos = null, etiqueta = "" }) {
+// El dibujo usa el ancho real en pantalla (en el celular, el texto no se achica con el gráfico).
+function useAnchoReal(inicial) {
+  const ref = useRef(null);
+  const [ancho, setAncho] = useState(inicial);
+  useEffect(() => {
+    if (!ref.current || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(([e]) => { const w = Math.round(e.contentRect.width); if (w > 0) setAncho(w); });
+    ro.observe(ref.current);
+    return () => ro.disconnect();
+  }, []);
+  return [ref, ancho];
+}
+
+function Barras({ vals, meses, sel, color = "var(--primary)", fmt = (v) => nf(v), alto = 150, ancho: inicial = 640, eventos = null, etiqueta = "" }) {
+  const [ref, ancho] = useAnchoReal(inicial);
   const padB = 20, padT = eventos ? 26 : 18, gap = 6, n = vals.length, bw = (ancho - gap * (n - 1)) / n;
   const max = Math.max(1, ...vals.map((v) => v || 0));
-  return html`<svg class="rd-barras" viewBox=${`0 0 ${ancho} ${alto}`} width="100%" role="img" aria-label=${etiqueta}>
+  return html`<svg ref=${ref} class="rd-barras" viewBox=${`0 0 ${ancho} ${alto}`} width="100%" role="img" aria-label=${etiqueta}>
     <line x1="0" x2=${ancho} y1=${alto - padB + 0.5} y2=${alto - padB + 0.5} />
     ${vals.map((v, i) => {
       const x = i * (bw + gap), bh = Math.max(v ? 2 : 0, ((v || 0) / max) * (alto - padB - padT)), y = alto - padB - bh, r = Math.min(4, bw / 2, bh);
@@ -157,8 +175,8 @@ function Barras({ vals, meses, sel, color = "var(--primary)", fmt = (v) => nf(v)
         <title>${mesLargo(meses[i])}: ${v == null ? t("sin dato") : fmt(v)}${ev ? " · " + ev.txt : ""}</title>
         <rect x=${x - gap / 2} y="0" width=${bw + gap} height=${alto} fill="transparent" />
         ${bh > 0 && html`<path d=${`M${x},${alto - padB} L${x},${y + r} Q${x},${y} ${x + r},${y} L${x + bw - r},${y} Q${x + bw},${y} ${x + bw},${y + r} L${x + bw},${alto - padB} Z`} style=${`fill:${color};opacity:${i === sel ? 1 : 0.38}`} />`}
-        ${i === sel && v ? html`<text x=${x + bw / 2} y=${y - 4} text-anchor="middle" class="rd-valor">${fmt(v)}</text>` : null}
-        <text x=${x + bw / 2} y=${alto - 5} text-anchor="middle">${mesCorto(meses[i])}</text>
+        ${i === sel && v ? html`<text x=${i === n - 1 ? x + bw : i === 0 ? x : x + bw / 2} y=${y - 4} text-anchor=${i === n - 1 ? "end" : i === 0 ? "start" : "middle"} class="rd-valor">${fmt(v)}</text>` : null}
+        ${(bw >= 30 || i === sel || ((n - 1 - i) % 2 === 0 && Math.abs(i - sel) > 1)) && html`<text x=${x + bw / 2} y=${alto - 5} text-anchor="middle">${mesCorto(meses[i])}</text>`}
         ${ev && ev.colores.map((c, j) => html`<circle cx=${x + bw / 2 + (j - (ev.colores.length - 1) / 2) * 11} cy="8" r="4.5" class="rd-ev" style=${`stroke:${c}`} />`)}
       </g>`;
     })}

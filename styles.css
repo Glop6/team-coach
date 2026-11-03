@@ -905,3 +905,18 @@ button.small-btn { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 @media (max-width: 900px) {
   .rd-grid2, .rd-lado { grid-template-columns: 1fr; }
 }
+
+/* Cambio 31: celular. Accesos en tarjetas (una fila = un bloque) y tabla de personas de Rendimiento sin columnas cortadas */
+@media (max-width: 600px) {
+  .tbl.access, .tbl.users { display: block; }
+  .tbl.access thead { display: none; }
+  .tbl.access tbody, .tbl.users tbody { display: block; }
+  .tbl.access tr, .tbl.users tr { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.6rem; padding: 0.7rem 0.8rem; border-bottom: 1px solid var(--line); }
+  .tbl.access td, .tbl.users td { display: block; padding: 0; border: 0; min-width: 0; }
+  .tbl.access td:first-child, .tbl.users td:first-child { flex: 1 1 100%; overflow-wrap: anywhere; }
+  .tbl.access td:nth-child(2) { flex: 1 1 100%; overflow-wrap: anywhere; font-size: 0.9rem; }
+  .tbl.access td.right, .tbl.users td.right { text-align: left; }
+  .rd-tabla .rd-quien .avatar, .rd-tabla th:last-child, .rd-tabla td:last-child:not([colspan]) { display: none; }
+  .rd-tabla th, .rd-tabla td { padding-left: 0.3rem; padding-right: 0.3rem; }
+  .rd-tabla .rd-quien { white-space: normal; }
+}

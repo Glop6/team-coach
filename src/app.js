@@ -114,10 +114,14 @@ async function organizeMeeting(api, data, idx, m) {
 export const isOverdue = (a) => a.due_date && OPEN.includes(a.status) && daysUntil(a.due_date) < 0;
 // Semáforo (Cambio 5): rojo = vencido o prioridad alta; amarillo = media; verde = baja
 const light = (a) => (isOverdue(a) || a.priority === "alta" ? "r" : a.priority === "baja" ? "g" : "y");
-const words = ["Condor", "Illimani", "Titicaca", "Puma", "Salar", "Yungas", "Tunari", "Sajama", "Uyuni", "Chaco", "Vicuna", "Huayna", "Chacaltaya", "Amboro", "Madidi"];
+const words = ["Condor", "Illimani", "Titicaca", "Puma", "Salar", "Yungas", "Tunari", "Sajama", "Uyuni", "Chaco", "Vicuna", "Huayna", "Chacaltaya", "Amboro", "Madidi",
+  "Mururata", "Potosi", "Sucre", "Tarija", "Beni", "Pando", "Oruro", "Samaipata", "Rurrenabaque", "Coroico", "Sorata", "Copacabana", "Tiwanaku", "Mamore", "Pilcomayo",
+  "Alpaca", "Llama", "Quinoa", "Jaguar", "Tucan", "Colibri", "Flamenco", "Totora", "Kantuta", "Patuju"];
+// Cambio 31: dos palabras distintas y 4 dígitos (unos 14 millones de combinaciones)
 const genPassword = () => {
-  const r = crypto.getRandomValues(new Uint32Array(2));
-  return `${words[r[0] % words.length]}-${1000 + (r[1] % 9000)}`;
+  const r = crypto.getRandomValues(new Uint32Array(3));
+  const a = r[0] % words.length, b = (a + 1 + (r[1] % (words.length - 1))) % words.length; // dos palabras distintas
+  return `${words[a]}-${words[b]}-${1000 + (r[2] % 9000)}`;
 };
 
 function useRoute() {
@@ -1682,6 +1686,7 @@ function AccessView() {
   const leads = data.people.filter((p) => isActive(p) || profileOf(p.id))
     .sort((a, b) => (idx.isLead(b.id) - idx.isLead(a.id)) || a.full_name.localeCompare(b.full_name));
   const sinAcceso = leads.filter((p) => !profileOf(p.id) && isActive(p));
+  const personas = data.profiles.filter((pr) => pr.role === "member" && !pr.disabled && pr.person_id);
   // Cambio 21: desactivar el login de alguien (por ejemplo, cuando sale de la empresa)
   const cambiarAcceso = async (pr) => {
     const quien = (pr.person_id && idx.person(pr.person_id)?.full_name) || pr.email;
@@ -1692,6 +1697,7 @@ function AccessView() {
   return html`<section class="page narrow">
     <header class="page-head"><div><h1>${t("Accesos")}</h1><p class="muted">${t("Crea el usuario de cada persona. Los líderes ven a su gente; las personas del equipo ven solo lo suyo (Mi espacio).")}</p></div>
       <div class="row">${sinAcceso.length > 0 && html`<button class="primary" onClick=${() => setModal({ bulk: true })}>${t("Crear accesos del equipo ({n})", { n: sinAcceso.length })}</button>`}
+      ${personas.length > 0 && html`<button onClick=${() => setModal({ claves: true })}>${t("Nuevas contraseñas para el equipo")}</button>`}
       <button onClick=${() => setModal({ edit: true })}>${t("Agregar persona")}</button></div></header>
     <table class="tbl access">
       <thead><tr><th>${t("Persona")}</th><th>${t("Usuario")}</th><th></th></tr></thead>
@@ -1703,7 +1709,7 @@ function AccessView() {
       })}</tbody>
     </table>
     <h2 class="mt">${t("Todos los usuarios")}</h2>
-    <table class="tbl"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id} class=${pr.disabled ? "off" : ""}><td>${pr.email}${pr.disabled && html` <span class="pill hb-bad">${t("Desactivado")}</span>`}</td>
+    <table class="tbl users"><tbody>${data.profiles.map((pr) => html`<tr key=${pr.id} class=${pr.disabled ? "off" : ""}><td>${pr.email}${pr.disabled && html` <span class="pill hb-bad">${t("Desactivado")}</span>`}</td>
       <td>${pr.role === "admin" ? "Admin" : html`<select class="mini" value=${pr.role} aria-label=${t("Rol")} onChange=${async (e) => { try { await api.update("profiles", pr.id, { role: e.target.value }); toast(t("Rol actualizado")); reload(); } catch (x) { toast(x.message, "bad"); } }}>
         <option value="lead">${t("Lead")}</option><option value="member">${t("Persona")}</option></select>`}</td>
       <td>${pr.role !== "admin" && html`<${PersonSelect} value=${pr.person_id} onChange=${async (v) => { await api.update("profiles", pr.id, { person_id: v }); reload(); }} allowEmpty=${t("Sin vincular")} />`}</td>
@@ -1712,7 +1718,67 @@ function AccessView() {
     ${modal?.reset && html`<${CredModal} person=${modal.person} profile=${modal.reset} onClose=${() => setModal(null)} />`}
     ${modal?.edit && html`<${EditPerson} person=${{}} onClose=${() => setModal(null)} />`}
     ${modal?.bulk && html`<${BulkAccess} people=${sinAcceso} onClose=${() => setModal(null)} />`}
+    ${modal?.claves && html`<${BulkPasswords} profiles=${personas} onClose=${() => setModal(null)} />`}
   </section>`;
+}
+
+// Cambio 31: contraseñas nuevas en lote para las personas del equipo, con cambio obligatorio al entrar.
+// Se generan en el navegador y solo se muestran en esta ventana: no se guardan en ningún lado.
+function BulkPasswords({ profiles, onClose }) {
+  const { api, reload, idx } = useApp();
+  const [filas, setFilas] = useState(() => profiles.map((pr) => ({ pr, p: idx.person(pr.person_id), on: !!pr.must_change_password, pw: genPassword() }))
+    .sort((a, b) => (a.p?.full_name ?? a.pr.email).localeCompare(b.p?.full_name ?? b.pr.email)));
+  const [res, setRes] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const elegidas = filas.filter((f) => f.on);
+  const set = (i, patch) => setFilas((fs) => fs.map((f, j) => (j === i ? { ...f, ...patch } : f)));
+  const run = async () => {
+    if (!confirm(t("¿Cambiar la contraseña de {n} personas? La que tienen ahora deja de funcionar.", { n: elegidas.length }))) return;
+    setBusy(true);
+    const out = [];
+    try {
+      for (let i = 0; i < elegidas.length; i += 10) {
+        const lote = elegidas.slice(i, i + 10);
+        const r = await api.fn("reset_passwords", { users: lote.map((f) => ({ user_id: f.pr.id, password: f.pw })) });
+        for (const x of r.results ?? []) out.push({ ...x, f: lote.find((f) => f.pr.id === x.user_id) });
+      }
+    } catch (x) { toast(x.message, "bad"); }
+    setRes(out); setBusy(false); reload();
+  };
+  const url = location.origin + location.pathname;
+  const nombre = (x) => x.f?.p?.full_name ?? x.f?.pr.email ?? "—";
+  const msg = (x) => t("Hola {n}, ya tienes acceso a Team Coach, tu espacio personal (horas, pendientes, reuniones e incidencias).\nEnlace: {u}\nUsuario: {e}\nContraseña inicial: {p}\nAl entrar te pedirá crear tu propia contraseña.", { n: firstName(nombre(x)), u: url, e: x.f?.pr.email, p: x.f?.pw });
+  const copiar = (txt) => { navigator.clipboard?.writeText(txt); toast(t("Copiado")); };
+  if (res) {
+    const ok = res.filter((x) => x.ok);
+    return html`<${Modal} title=${t("Contraseñas nuevas")} onClose=${onClose} wide=${true}>
+      <div class="stack">
+        <p>${t("Se cambiaron {n} de {m}. Las contraseñas solo se ven en esta ventana: al cerrarla no se pueden volver a ver.", { n: ok.length, m: res.length })}</p>
+        <table class="tbl bulk-res"><thead><tr><th>${t("Persona")}</th><th>${t("Correo")}</th><th>${t("Contraseña")}</th><th></th></tr></thead>
+          <tbody>${res.map((x) => html`<tr key=${x.user_id}><td>${nombre(x)}</td><td class="small">${x.f?.pr.email}</td>
+            <td>${x.ok ? html`<code>${x.f?.pw}</code>` : html`<span class="small late-t">${x.error}</span>`}</td>
+            <td class="right">${x.ok && html`<button class="link small" onClick=${() => copiar(msg(x))}>${t("Copiar mensaje")}</button>`}</td></tr>`)}</tbody></table>
+        <div class="row end">
+          ${ok.length > 0 && html`<button onClick=${() => copiar([[t("Nombre"), t("Correo"), t("Contraseña")], ...ok.map((x) => [nombre(x), x.f?.pr.email, x.f?.pw])].map((r) => r.join("\t")).join("\n"))}>${t("Copiar tabla")}</button>
+            <button onClick=${() => copiar(ok.map(msg).join("\n\n———\n\n"))}>${t("Copiar todos los mensajes")}</button>`}
+          <button class="primary" onClick=${onClose}>${t("Cerrar")}</button></div>
+      </div>
+    <//>`;
+  }
+  return html`<${Modal} title=${t("Nuevas contraseñas")} onClose=${onClose} wide=${true}>
+    <div class="stack">
+      <p class="muted small">${t("Genera una contraseña nueva y distinta para cada persona marcada. Al entrar, cada una tendrá que crear la suya. Vienen marcadas las que todavía no cambiaron su contraseña.")}</p>
+      <table class="tbl bulk-tbl"><thead><tr><th></th><th>${t("Persona")}</th><th>${t("Correo")}</th><th>${t("Estado")}</th></tr></thead>
+        <tbody>${filas.map((f, i) => html`<tr key=${f.pr.id} class=${f.on ? "" : "off"}>
+          <td><input type="checkbox" checked=${f.on} onChange=${(e) => set(i, { on: e.target.checked })} aria-label=${t("Contraseña nueva para {n}", { n: f.p?.full_name ?? f.pr.email })} /></td>
+          <td>${f.p?.full_name ?? "—"}<div class="small muted">${idx.group(f.p?.group_id)?.name ?? ""}</div></td>
+          <td class="small">${f.pr.email}</td>
+          <td class="small muted">${f.pr.must_change_password ? t("No la cambió todavía") : t("Ya tiene la suya")}</td></tr>`)}</tbody></table>
+      <div class="row end"><span class="small muted grow">${t("{n} seleccionadas", { n: elegidas.length })}</span>
+        <button type="button" onClick=${onClose}>${t("Cancelar")}</button>
+        <button class="primary" disabled=${busy || !elegidas.length} onClick=${run}>${busy ? t("Cambiando…") : t("Cambiar {n} contraseñas", { n: elegidas.length })}</button></div>
+    </div>
+  <//>`;
 }
 
 // Cambio 20: crear los accesos de todo el equipo de una vez
