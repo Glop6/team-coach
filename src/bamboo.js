@@ -678,7 +678,7 @@ function Horarios() {
     <form class="hb-form stack-s mt" onSubmit=${guardar}>
       <h3>${t("Agregar o cambiar horario")}</h3>
       <div class="row">
-        <label class="grow">${t("Persona (como está en Bamboo)")}<input list="bb-nombres" value=${nombre} onInput=${(e) => setNombre(e.target.value)} placeholder="Erika Ojeda" /></label>
+        <label class="grow">${t("Persona (como está en Bamboo)")}<input list="bb-nombres" value=${nombre} onInput=${(e) => setNombre(e.target.value)} placeholder="Laura Gómez" /></label>
         <label class="grow">${t("Nota")}<input value=${nota} onInput=${(e) => setNota(e.target.value)} placeholder=${t("Ej.: acuerdo con el cliente")} /></label>
       </div>
       <div class="row hb-days">${DIA_OPC.map((d) => html`<label class="check"><input type="checkbox" checked=${dias.includes(d)} onChange=${() => toggle(d)} />${DIAS()[d]}</label>`)}</div>
