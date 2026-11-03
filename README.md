@@ -11,11 +11,13 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
 |---|---|
 | `index.html`, `styles.css`, `app.js` | La app publicada. `app.js` se genera con `npm run build` y se commitea. |
 | `src/` | Código de la app (Preact + htm). `src/config.js` tiene la dirección y la clave publishable de Supabase; también la usa el dashboard. |
-| `src/perf/` | Motor de cálculo del dashboard, como módulo puro (lo usa la sección Rendimiento). |
-| `dashboard/` | Vistas detalladas y comparativas del Performance Dashboard (admin y líderes). Lee el esquema `perf` y comparte la sesión con la app. |
+| `src/perf/motor.js` | Las reglas de cálculo del dashboard como funciones puras. Hoy no lo importa la app: es la referencia con la que se verificaron los resúmenes de `20_perf_resumen.sql`. |
+| `dashboard/` | Vistas detalladas y comparativas del Performance Dashboard (admin y líderes). Lee el esquema `perf` y comparte la sesión con la app. Las personas del equipo ven ahí un aviso que las manda a "My performance". |
 | `supabase/NN_*.sql` | Cambios de la base, numerados en el orden en que se ejecutan. Cada uno dice al inicio qué hace y después de cuál va. |
 | `supabase/functions/` | Edge Functions: `coach` (IA de reuniones), `bamboo-sync` (horas desde BambooHR) y `ai-proxy` (IA del dashboard, con topes de costo). |
+| `supabase/carga/` | Carga inicial de los datos de MS Dash en `perf` y la comparación de totales (ver su `LEEME.md`). |
 | `supabase/PASOS_BAMBOO.md` | Pasos para configurar la integración con BambooHR. |
+| `scripts/respaldo.sh` | Respaldo completo con un solo comando (ver *Respaldos*). |
 
 ## Recrear la base desde cero
 
@@ -42,7 +44,7 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
    | `21_perf_ai_tope.sql` | 29 · topes de costo de la IA | 2026-10-29 |
 
 3. **Exponer el esquema `perf`** en la API (Settings → API → Exposed schemas).
-4. **Cargar los datos del dashboard** en `perf` (casos, QA, personas y `app_settings.team_config`). Los scripts de carga tienen nombres del equipo y se guardan fuera del repo.
+4. **Cargar los datos del dashboard** en `perf`: `supabase/carga/LEEME.md`. Los ajustes con nombres del equipo (`app_settings.team_config`) están en un SQL privado.
 5. **Edge Functions:** publicar `coach`, `bamboo-sync` y `ai-proxy`. Secretos: `ANTHROPIC_API_KEY` y `BAMBOO_API_KEY` (opcional: `BAMBOO_SUBDOMAIN`).
 6. **App:** `npm install`, `npm run build` y publicar la raíz del repo (incluida `dashboard/`).
 
@@ -50,11 +52,14 @@ Un SQL nuevo lleva el siguiente número libre y empieza con un encabezado que di
 
 ## Respaldos y exportaciones
 
+Después de cada carga mensual: `scripts/respaldo.sh` (o `scripts/respaldo.sh --ms-dash` mientras MS Dash siga activo). Pide la contraseña de cada base, verifica que el respaldo se abre y nunca sobrescribe uno del mismo día.
+
 Siempre fuera del repo, en una carpeta por fecha:
 
 ```
 ~/Backups/supabase/AAAA-MM-DD/
   team-coach.dump      respaldo completo (pg_dump, formato custom): esquema, datos y auth
+  ms-dash.dump         lo mismo para MS Dash, mientras siga activo
   ref_*.csv            números de referencia para comparar después de una migración
   sql_privados/        los SQL con datos del equipo (01 a 05 y 06b)
 ```
