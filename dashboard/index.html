@@ -3715,24 +3715,14 @@ function narrateProject(x){
   return { text: parts.join(' '), take };
 }
 
-// Three teams, never mixed in Monthly: Primary MS Team (everything except the two dedicated teams), SEO, Copywriters.
-// A person on a dedicated team belongs to it with all their work; everyone else is placed by the project of each record.
+// Three teams, never mixed in Monthly: Primary MS Team, SEO, Copywriters.
+// The rule lives in src/perf/equipos.js (Cambio 33), shared with Team Coach's Rendimiento; loaded in init().
 const MS_TEAM_LABELS = { primary:'Primary MS Team', seo:'SEO team', cw:'Copywriters' };
 let MS_PRIMARY_ALWAYS = new Set(); // from perf.app_settings team_config; // leads the copywriters but works with the primary team
-function msTeamOfPerson(key){
-  if(MS_PRIMARY_ALWAYS.has(key)) return 'primary';
-  const g = TEAM_GROUPS;
-  if(g.seo && (g.seo.leader===key || g.seo.members.includes(key))) return 'seo';
-  if(g.copywriters && (g.copywriters.leader===key || g.copywriters.members.includes(key))) return 'cw';
-  return null;
-}
-function msTeamOf(r){
-  const p = msTeamOfPerson(r.ownerKey);
-  if(p) return p;
-  if(r.project===PROJECT_LABELS.seo) return 'seo';
-  if(r.project===PROJECT_LABELS.cw) return 'cw';
-  return 'primary';
-}
+let crearRepartoEquipos = null, REPARTO = null;
+function rehacerReparto(){ if(crearRepartoEquipos) REPARTO = crearRepartoEquipos({ teamGroups: TEAM_GROUPS, msPrimaryAlways: [...MS_PRIMARY_ALWAYS] }); }
+function msTeamOfPerson(key){ return REPARTO ? REPARTO.persona(key) : null; }
+function msTeamOf(r){ return REPARTO ? REPARTO.fila(r.ownerKey, r.project) : 'primary'; }
 function buildMonthlyMeeting(monthKey, scope){
   if(!monthKey) return null;
   const inScope = r => !scope || msTeamOf(r)===scope;
@@ -5566,6 +5556,7 @@ async function loadTeamConfig(){
   ROTATES_INTO_LP = new Set(c.rotatesIntoLp || []);
   MS_PRIMARY_ALWAYS = new Set(c.msPrimaryAlways || []);
   COPYWRITERS_EXCLUDE = new Set(c.copywritersExclude || []);
+  rehacerReparto();
 }
 
 // Team Coach: aviso con enlace a Team Coach, sin cerrar la sesión (la comparten)
@@ -5928,6 +5919,8 @@ async function refreshSyncEpochAfterOwnChange(){
    INIT
 ===================================================================== */
 (async function init(){
+  try{ crearRepartoEquipos = (await import('../src/perf/equipos.js')).crearReparto; rehacerReparto(); }
+  catch(e){ console.error('Team split rule not loaded (src/perf/equipos.js)', e); }
   // A shared snapshot file already carries its own data and needs no sign-in.
   if(window.__PRELOADED__ && Array.isArray(window.__PRELOADED__)){
     hideAuth();

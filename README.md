@@ -11,7 +11,8 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
 |---|---|
 | `index.html`, `styles.css`, `app.js` | La app publicada. `app.js` se genera con `npm run build` y se commitea. |
 | `src/` | Código de la app (Preact + htm). `src/config.js` tiene la dirección y la clave publishable de Supabase; también la usa el dashboard. |
-| `src/perf/motor.js` | Las reglas de cálculo del dashboard como funciones puras. Hoy no lo importa la app: es la referencia con la que se verificaron los resúmenes de `20_perf_resumen.sql`. |
+| `src/perf/motor.js` | Las reglas de cálculo del dashboard como funciones puras. Es la referencia con la que se verificaron los resúmenes de `20_perf_resumen.sql`; la app solo toma de aquí los nombres de proyecto (a través de `equipos.js`). |
+| `src/perf/equipos.js` | Reparto en los tres equipos del Monthly Meeting (Primary, SEO y Copywriters). Es el único lugar de esa regla: lo usan Rendimiento y el dashboard. |
 | `dashboard/` | Vistas detalladas y comparativas del Performance Dashboard (admin y líderes). Lee el esquema `perf` y comparte la sesión con la app. Las personas del equipo ven ahí un aviso que las manda a "My performance". |
 | `supabase/NN_*.sql` | Cambios de la base, numerados en el orden en que se ejecutan. Cada uno dice al inicio qué hace y después de cuál va. |
 | `supabase/functions/` | Edge Functions: `coach` (IA de reuniones), `bamboo-sync` (horas desde BambooHR) y `ai-proxy` (IA del dashboard, con topes de costo). |

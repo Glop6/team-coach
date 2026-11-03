@@ -1038,4 +1038,11 @@ export const EN = {
   "{h} h registradas en Bamboo en {m} (esperadas: {e} h); {c} h fueron casos.": "{h} h logged in Bamboo in {m} (expected: {e} h); {c} h were cases.",
   "Sin reuniones, incidencias ni kudos todavía.": "No meetings, incidents or kudos yet.",
   "{n} casos en 12 meses": "{n} cases in 12 months",
+  // Cambio 33: Rendimiento del admin por equipo (Primary / SEO / Copywriters)
+  "tareas": "tasks",
+  "Sin QA": "No QA",
+  "{p}% errores en QA": "{p}% QA errors",
+  "Casos por mes, Primary": "Cases per month, Primary",
+  "Últimos 12 meses. SEO y Copywriters cuentan tareas: su evolución está en sus tarjetas.": "Last 12 months. SEO and Copywriters count tasks: their trend is on their cards.",
+  "Total del equipo: {n} casos y tareas · {h} h. Incluye a los ex-miembros, igual que el Monthly Meeting.": "Whole team: {n} cases and tasks · {h} h. Includes former members, like the Monthly Meeting.",
 };

@@ -121,7 +121,11 @@ export function createApi() {
           todo(() => pf.rpc("resumen_qa", { p_desde: desde }).order("person_id").order("mes")),
           todo(() => pf.rpc("resumen_horario", { p_desde: desdeHorario }).order("person_id").order("hora").order("dia")),
         ]);
-        return { available: true, people, casos, qa, horario };
+        // Cambio 33: grupos del dashboard para repartir en Primary / SEO / Copywriters (solo lo usa el admin;
+        // a un líder sin permiso de subida la base no le entrega la fila)
+        const equipos = await pf.from("app_settings").select("value").eq("key", "team_config").maybeSingle()
+          .then(({ data }) => data?.value ?? null, () => null);
+        return { available: true, people, casos, qa, horario, equipos };
       } catch (e) {
         return { available: false, error: e.message };
       }
