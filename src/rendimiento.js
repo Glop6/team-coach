@@ -15,6 +15,7 @@ import htm from "htm";
 import { useApp, t, getLang, Avatar, Empty, Busy, MEETING_KIND } from "./app.js";
 import { esKudos } from "./incidencias.js";
 import { PERF_DASHBOARD_URL } from "./config.js";
+import { EQUIPOS, crearReparto, claveNombre } from "./perf/equipos.js";
 
 const html = htm.bind(h);
 const N_MESES = 12;
@@ -55,7 +56,7 @@ function construirModelo(perf, data, bamboo) {
   const personas = new Map();
   for (const p of perf.people) {
     const tc = p.tc_person_id ? tcPeople.get(p.tc_person_id) ?? null : null;
-    personas.set(p.id, { id: p.id, nombre: tc?.full_name ?? p.full_name, active: p.active, tc, group_id: tc?.group_id ?? null,
+    personas.set(p.id, { id: p.id, nombre: tc?.full_name ?? p.full_name, clave: claveNombre(p.full_name), active: p.active, tc, group_id: tc?.group_id ?? null,
       cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), proj: meses.map(() => ({})), hora: Array(24).fill(0), dia: Array(7).fill(0),
       inc: cero(), kudos: cero(), reuniones: [], bamboo: meses.map(() => null), conCasos: false });
   }
@@ -92,7 +93,30 @@ function construirModelo(perf, data, bamboo) {
       b.h += Number(d.hours || 0); b.e += Number(d.expected || 0);
     }
   }
-  return { meses, ahora, personas };
+  return { meses, ahora, personas, equipos: seriesEquipos(perf, personas, iMes) };
+}
+
+// Cambio 33: series de los tres equipos (Primary / SEO / Copywriters) con la regla de perf/equipos.js.
+// Incluye a los ex-miembros, igual que el Monthly Meeting del dashboard. Sin team_config (líderes), null.
+function seriesEquipos(perf, personas, iMes) {
+  if (!perf.equipos) return null;
+  const rep = crearReparto(perf.equipos);
+  for (const p of personas.values()) p.equipo = rep.persona(p.clave);   // equipo dedicado (para la etiqueta de las tarjetas de grupo)
+  const eqs = Object.fromEntries(EQUIPOS.map((k) => [k, { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), gente: cero().map(() => new Set()) }]));
+  for (const r of perf.casos) {
+    const p = personas.get(r.person_id), i = iMes.get(r.mes);
+    if (!p || i === undefined) continue;
+    const s = eqs[rep.fila(p.clave, r.proyecto)];
+    s.cases[i] += r.casos; s.loe[i] += Number(r.loe_min);
+    if (r.casos > 0) s.gente[i].add(p.id);
+  }
+  for (const r of perf.qa) {
+    const p = personas.get(r.person_id), i = iMes.get(r.mes);
+    if (!p || i === undefined) continue;
+    const s = eqs[rep.qa(p.clave)];
+    s.qaTot[i] += r.total; s.qaErr[i] += r.errores; s.qaProg[i] += r.en_progreso;
+  }
+  return eqs;
 }
 
 // Suma de varias personas (un grupo, el equipo)
@@ -249,6 +273,26 @@ function Kpis({ s, meses, i, color, cuarto }) {
   </div>`;
 }
 
+// Cambio 33: admin → una tarjeta por equipo, como el Monthly Meeting. SEO y Copywriters no tienen número de caso: cuentan tareas.
+const NOMBRE_EQUIPO = { primary: "Primary", seo: "SEO", cw: "Copywriters" };
+function Equipos({ eqs, meses, i }) {
+  const ant = meses[i - 1];
+  const total = sum(EQUIPOS.map((k) => eqs[k].cases[i])), horas = sum(EQUIPOS.map((k) => hrs(eqs[k].loe[i])));
+  return html`<div class="rd-kpis rd-equipos">${EQUIPOS.map((k) => {
+    const s = eqs[k], e = tasaError(s, i), n = s.gente[i].size;
+    return html`<div class="rd-kpi" key=${k}>
+      <div class="rd-kpi-l">${NOMBRE_EQUIPO[k]}</div>
+      <div class="rd-kpi-v">${nf(s.cases[i])}<small>${k === "primary" ? t("casos") : t("tareas")}</small></div>
+      <div class="rd-kpi-c">${vsAnterior(s.cases[i], s.cases[i - 1], ant)}</div>
+      <${Linea} vals=${s.cases.slice(0, i + 1)} />
+      <div class="rd-kpi-c rd-eq-datos"><span>${nf(hrs(s.loe[i]))} h</span>
+        <span>${e == null ? t("Sin QA") : t("{p}% errores en QA", { p: nf(e, 1) })}</span>
+        <span>${n === 1 ? t("1 persona") : t("{n} personas", { n: nf(n) })}</span></div>
+    </div>`;
+  })}</div>
+  <p class="small muted rd-eq-total">${t("Total del equipo: {n} casos y tareas · {h} h. Incluye a los ex-miembros, igual que el Monthly Meeting.", { n: nf(total), h: nf(horas) })}</p>`;
+}
+
 function Capacity({ ps, meses, i, color }) {
   const proj = {};
   ps.forEach((p) => Object.entries(p.proj[i]).forEach(([k, v]) => (proj[k] = (proj[k] || 0) + hrs(v.loe))));
@@ -319,17 +363,24 @@ export function RendimientoInicio() {
       <p class="muted">${isAdmin ? t("Todo el equipo, {m}.", { m: mesLargo(meses[sel]) }) : t("Tus grupos, {m}.", { m: mesLargo(meses[sel]) })}</p></div>
       <${EnlaceDashboard} /></header>
     <${SelectorMes} meses=${meses} sel=${sel} onSel=${setSel} />
-    ${isAdmin && html`
+    ${isAdmin && modelo.equipos && html`
+      <${Equipos} eqs=${modelo.equipos} meses=${meses} i=${sel} />
+      <section class="rd-card"><h2>${t("Casos por mes, Primary")}</h2><p class="rd-sub">${t("Últimos 12 meses. SEO y Copywriters cuentan tareas: su evolución está en sus tarjetas.")}</p>
+        <${Barras} vals=${modelo.equipos.primary.cases} meses=${meses} sel=${sel} etiqueta=${t("Casos por mes, Primary")} /></section>`}
+    ${isAdmin && !modelo.equipos && html`
       <${Kpis} s=${todos} meses=${meses} i=${sel} color="var(--primary)" cuarto=${html`<${Kpi} etiqueta=${t("Personas con casos")} valor=${nf(activos.filter((p) => p.cases[sel] > 0).length)} debajo=${t("en el mes")} />`} />
       <section class="rd-card"><h2>${t("Casos por mes, todo el equipo")}</h2><p class="rd-sub">${t("Últimos 12 meses. El mes resaltado es el elegido.")}</p>
         <${Barras} vals=${todos.cases} meses=${meses} sel=${sel} etiqueta=${t("Casos por mes, todo el equipo")} /></section>`}
     <h2 class="mt">${t("Grupos")}</h2>
     <div class="rd-gcards">${grupos.map((g) => {
       const mem = miembros(g.id), s = serie(mem), cc = mem.some((p) => p.conCasos);
+      // SEO y Copywriters cuentan tareas; un grupo con gente de los dos lados, casos y tareas
+      const dedicados = mem.filter((p) => p.conCasos && (p.equipo === "seo" || p.equipo === "cw")).length, conCasos = mem.filter((p) => p.conCasos).length;
+      const unidad = !dedicados ? t("casos") : dedicados === conCasos ? t("tareas") : t("casos y tareas");
       return html`<a class="rd-gcard" style=${`--c:${g.color}`} href=${"#/rendimiento-grupo/" + g.id} key=${g.id}><span class="rd-gcard-st"></span><span class="rd-gcard-in">
         <strong class="rd-gcard-h">${g.name}</strong>
         <span class="small muted">${lideres(g.id).join(" · ") || t("Reportan directo a Gus")} · ${mem.length === 1 ? t("1 persona") : t("{n} personas", { n: mem.length })}</span>
-        ${cc ? html`<span class="rd-gcard-n"><span><b>${nf(s.cases[sel])}</b><span class="small muted">${t("casos")} · ${nf(hrs(s.loe[sel]))} h</span><span class="small">${vsAnterior(s.cases[sel], s.cases[sel - 1], meses[sel - 1])}</span></span><${Linea} vals=${s.cases.slice(0, sel + 1)} color=${g.color} ancho=${120} /></span>`
+        ${cc ? html`<span class="rd-gcard-n"><span><b>${nf(s.cases[sel])}</b><span class="small muted">${unidad} · ${nf(hrs(s.loe[sel]))} h</span><span class="small">${vsAnterior(s.cases[sel], s.cases[sel - 1], meses[sel - 1])}</span></span><${Linea} vals=${s.cases.slice(0, sel + 1)} color=${g.color} ancho=${120} /></span>`
           : html`<span class="small muted rd-gcard-vacio">${t("Sin casos en el dashboard")}</span>`}
       </span></a>`;
     })}</div>

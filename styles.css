@@ -920,3 +920,8 @@ button.small-btn { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
   .rd-tabla th, .rd-tabla td { padding-left: 0.3rem; padding-right: 0.3rem; }
   .rd-tabla .rd-quien { white-space: normal; }
 }
+
+/* Cambio 33: Rendimiento del admin por equipo */
+.rd-equipos .rd-linea { margin-top: 0.35rem; }
+.rd-eq-datos { margin-top: 0.4rem; gap: 0.25rem 0.75rem; }
+.rd-eq-total { margin: -0.4rem 0 1rem; }
