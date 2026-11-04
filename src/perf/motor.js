@@ -4,6 +4,8 @@
 // salía de variables globales (filtros, proyecto abierto) acá llega en `sel`.
 // LOE: siempre en minutos (la columna del Excel es "LOE min"). Para mostrar horas: minutos / 60.
 
+import { esBug, esCerrada, resumenQa } from "./qa.js";
+
 export const PROJECT_LABELS = {
   postings: "CodeRoad Internal - Postings",
   lp: "CodeRoad Internal - LP",
@@ -215,8 +217,8 @@ export function buildTrendData(list, granularity, sel) {
 }
 
 // ---------- QA ----------
-// Un Failed/Critical con Fix Comment "NA" se marcó por error (duplicado, no fue culpa de la persona...): no es error real.
-export function isRealError(r) { return (r.qaStatus === "Failed" || r.qaStatus === "Critical") && !r.isNA; }
+// Cambio 34: las reglas de QA (bug, oportunidad, sin falla, NA) viven en qa.js. Error real = bug.
+export const isRealError = esBug;
 
 // Con una serie mensual de tasas: ¿las últimas `months` transiciones subieron todas (empeora) o bajaron todas (mejora)?
 export function trailingStreak(rates, months) {
@@ -233,19 +235,11 @@ export function trailingStreak(rates, months) {
 export function qaBySpecialist(list, meses = 3) {
   const by = {};
   list.forEach((r) => {
-    const b = by[r.ownerKey] || (by[r.ownerKey] = { display: r.ownerDisplay, total: 0, passed: 0, failed: 0, critical: 0, observed: 0, opportunity: 0, inProgress: 0, fu1: 0, fu2: 0, fu3: 0, na: 0, realErrors: 0, byMonth: {} });
-    b.total++;
-    if (r.qaStatus === "Passed") b.passed++;
-    else if (r.qaStatus === "Failed") b.failed++;
-    else if (r.qaStatus === "Critical") b.critical++;
-    else if (r.qaStatus === "Observed") b.observed++;
-    else if (r.qaStatus === "Opportunity") b.opportunity++;
-    else if (r.qaStatus === "In progress") b.inProgress++;
-    if (r.isNA) b.na++;
-    const err = isRealError(r);
-    if (err) b.realErrors++;
+    (by[r.ownerKey] || (by[r.ownerKey] = { display: r.ownerDisplay, list: [], fu1: 0, fu2: 0, fu3: 0, byMonth: {} })).list.push(r);
+    const b = by[r.ownerKey];
+    const err = esBug(r);
     if (r.followUpLevel !== null && r.followUpLevel >= 1) { if (r.followUpLevel >= 3) b.fu3++; else if (r.followUpLevel === 2) b.fu2++; else b.fu1++; }
-    if (r.dateCompleted) {
+    if (r.dateCompleted && esCerrada(r)) {
       const mk = periodKey(r.dateCompleted, "month");
       const m = b.byMonth[mk] || (b.byMonth[mk] = { total: 0, error: 0 });
       m.total++;
@@ -253,14 +247,12 @@ export function qaBySpecialist(list, meses = 3) {
     }
   });
   return Object.entries(by).map(([key, b]) => {
-    const resolved = b.total - b.inProgress;
+    const q = resumenQa(b.list);
     const mkeys = Object.keys(b.byMonth).sort();
     const monthlyRates = mkeys.map((mk) => { const m = b.byMonth[mk]; return m.total ? (m.error / m.total) * 100 : 0; });
     const streak = trailingStreak(monthlyRates, meses);
     const trend = streak.worsening ? "worsening" : streak.improving ? "improving" : monthlyRates.length >= 2 ? "stable" : null;
-    return { key, display: b.display, total: b.total, passed: b.passed, failed: b.failed, critical: b.critical,
-      observed: b.observed, opportunity: b.opportunity, inProgress: b.inProgress, na: b.na, realErrors: b.realErrors,
-      errorRate: resolved ? (b.realErrors / resolved) * 100 : 0, trend, streak,
+    return { key, display: b.display, ...q, realErrors: q.bugs, errorRate: q.pctBugs ?? 0, trend, streak,
       fu1: b.fu1, fu2: b.fu2, fu3: b.fu3, fuTotal: b.fu1 + b.fu2 + b.fu3, byMonth: b.byMonth };
   });
 }
