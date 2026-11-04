@@ -1027,9 +1027,18 @@ function parseFollowUpLevel(raw){
   const m = String(raw).match(/(\d+)/);
   return m ? parseInt(m[1],10) : null;
 }
-// A Failed/Critical case whose Fix Comment is "NA"/"N/A" was flagged in error (duplicate
-// case, not the specialist's fault, already fixed, etc.) — don't count it as a real error.
-function isRealError(r){ return (r.qaStatus==='Failed'||r.qaStatus==='Critical') && !r.isNA; }
+// Cambio 34: QA rules (bug / opportunity / no fault / NA) live in src/perf/qa.js, shared with the app
+// and mirrored in SQL (23_perf_qa_reglas.sql). Bug = Failed/Critical without NA; Opportunity/Observed =
+// opportunity; anything with an NA answer = no fault; In progress stays out of every rate.
+let REGLAS_QA = null;
+function esNA(fixComment){ return REGLAS_QA ? REGLAS_QA.esNA(fixComment) : false; }
+function claseQa(r){ return REGLAS_QA ? REGLAS_QA.claseQa(r) : null; }
+function isRealError(r){ return claseQa(r)==='bug'; }
+function esCerradaQa(r){ return REGLAS_QA ? REGLAS_QA.esCerrada(r) : false; }
+function esNaAplicado(r){ return REGLAS_QA ? REGLAS_QA.esNaAplicado(r) : false; }
+// Without the module (e.g. a downloaded snapshot file) QA shows empty instead of breaking the page
+function resumenQa(list){ return REGLAS_QA ? REGLAS_QA.resumenQa(list)
+  : { total:list.length, cerradas:0, bugs:0, critical:0, failed:0, oportunidades:0, opportunity:0, observed:0, sinFalla:0, passed:0, na:0, enCurso:0, pctBugs:null, pctOportunidades:null, pctSinFalla:null }; }
 // Given a chronological array of monthly rates, check whether the last `months`
 // month-over-month transitions were ALL increases (worsening) or ALL decreases
 // (improving). Needs months+1 data points; a single noisy month never triggers this
@@ -1057,10 +1066,8 @@ function extractQaRecord(hmap, row, fileName, sheetName){
   const reviewerRaw = get('QA Completed by') || null;
   const dateCompleted = toDate(get('Date QA Completed'));
   const fixComment = get('QA Fix Comment') || null;
-  // Reviewers sometimes mark a flagged issue's fix comment "NA"/"N/A" when the
-  // issue turns out not to be a real error (duplicate case, not the specialist's
-  // fault, already fixed, etc.) — don't count these against the specialist.
-  const isNA = /^\s*n\s*[\/.]?\s*a\.?\s*$/i.test(String(fixComment||'').trim());
+  // The specialist answered "NA"/"N/A" (not their fault, out of scope...): no fault (src/perf/qa.js)
+  const isNA = esNA(fixComment);
   const qaComment = get('QA Comment') || null;
   const followUpLevel = parseFollowUpLevel(getAny(['Follow-Ups','Follow up','Follow-up','Follow Up']));
   const rec = {
@@ -1418,7 +1425,7 @@ function arrToQaRec(a){
     followUpLevel: a[17]===undefined ? null : a[17],
     // Derived from fixComment (not stored separately) so records persisted before
     // this feature existed are still classified correctly on load.
-    isNA: /^\s*n\s*[\/.]?\s*a\.?\s*$/i.test(String(a[10]||'').trim()),
+    isNA: esNA(a[10]),
     sourceType:'qa'
   });
 }
@@ -3746,14 +3753,13 @@ function buildMonthlyMeeting(monthKey, scope){
   const qaMonth = allQaRecords().filter(r=>r.dateCompleted && r.dateCompleted>=range.from && r.dateCompleted<=range.to && qaInScope(r));
   const qaPrev = allQaRecords().filter(r=>r.dateCompleted && r.dateCompleted>=prevRange.from && r.dateCompleted<=prevRange.to && qaInScope(r));
   const teamQaTotal = qaMonth.length;
-  const teamQaBad = qaMonth.filter(isRealError).length;
-  const teamQaPassRate = teamQaTotal ? (1-teamQaBad/teamQaTotal)*100 : null;
+  const teamQa = resumenQa(qaMonth), prevTeamQa = resumenQa(qaPrev);
+  const teamQaPassRate = teamQa.pctSinFalla;   // % no fault, over closed reviews
 
   function qaScoreFor(records, ownerKey){
-    const recs = records.filter(r=>r.ownerKey===ownerKey);
-    if(recs.length < 3) return null;
-    const bad = recs.filter(isRealError).length;
-    return { score: (1-bad/recs.length)*100, total: recs.length, bad };
+    const s = resumenQa(records.filter(r=>r.ownerKey===ownerKey));
+    if(s.cerradas < 3) return null;
+    return { score: 100 - s.pctBugs, total: s.cerradas, bad: s.bugs };
   }
 
   // Per-person cases/hours/projects this month
@@ -3822,7 +3828,7 @@ function buildMonthlyMeeting(monthKey, scope){
   // QA is only done on Landing Pages, so a QA row whose Type is empty or not in the Type -> Project table counts as Landing Pages.
   const qaProjectOf = r => { const m = r.qaType ? typeMapLookup(r.qaType) : null; return m ? m.project : PROJECT_LABELS.lp; };
   const qaAgg = list => { const a = {};
-    list.forEach(r=>{ const p = qaProjectOf(r); if(!p) return; const o = a[p] = a[p] || { total:0, bad:0 }; o.total++; if(isRealError(r)) o.bad++; });
+    list.forEach(r=>{ if(!esCerradaQa(r)) return; const p = qaProjectOf(r); if(!p) return; const o = a[p] = a[p] || { total:0, bad:0 }; o.total++; if(isRealError(r)) o.bad++; });
     return a; };
   const curP = projAgg(monthList), prevP = projAgg(prevList), curQ = qaAgg(qaMonth), prevQ = qaAgg(qaPrev);
   const pctChange = (c,p)=> p>0 ? (c-p)/p*100 : null;
@@ -3912,8 +3918,9 @@ function buildMonthlyMeeting(monthKey, scope){
     const c = sumAgg(monthList), p = sumAgg(prevList);
     if(!c.cases && !p.cases) return;
     const qa1 = qaMonth.filter(r=>gset.has(r.ownerKey)), qa0 = qaPrev.filter(r=>gset.has(r.ownerKey));
-    const qC = qa1.length ? { total:qa1.length, bad:qa1.filter(isRealError).length } : null;
-    const qP = qa0.length ? { total:qa0.length, bad:qa0.filter(isRealError).length } : null;
+    const s1 = resumenQa(qa1), s0 = resumenQa(qa0);
+    const qC = s1.cerradas ? { total:s1.cerradas, bad:s1.bugs } : null;
+    const qP = s0.cerradas ? { total:s0.cerradas, bad:s0.bugs } : null;
     const idle = Array.from(gset).filter(k=>!keys.includes(k) && !FORMER_EMPLOYEES.has(k) && !CAPACITY_FULLY_EXCLUDED.has(k)).length;
     groupHealth.push(healthOf(g.label, act, c, p, qC, qP, { idle, groupKey:gk, size:gset.size }));
   });
@@ -3946,10 +3953,10 @@ function buildMonthlyMeeting(monthKey, scope){
     if(up.casesPct>10) facts.push(`🚀 Biggest riser: ${up.project.replace('CodeRoad Internal - ','')} (+${up.casesPct.toFixed(0)}% cases vs last month).`);
     if(down.casesPct<-10 && down!==up) facts.push(`🔻 Biggest drop: ${down.project.replace('CodeRoad Internal - ','')} (${down.casesPct.toFixed(0)}% cases vs last month).`);
   }
-  const qaCritical = qaMonth.filter(r=>r.qaStatus==='Critical' && !r.isNA).length, qaCriticalPrev = qaPrev.filter(r=>r.qaStatus==='Critical' && !r.isNA).length;
-  if(qaMonth.length>=20){
-    const prevRate = qaPrev.length ? (1-qaPrev.filter(isRealError).length/qaPrev.length)*100 : null;
-    facts.push(`🧪 QA: ${qaMonth.length} reviews, ${teamQaPassRate.toFixed(1)}% pass${prevRate!==null?` (${(teamQaPassRate-prevRate>=0?'+':'')}${(teamQaPassRate-prevRate).toFixed(1)} pts vs last month)`:''}; ${qaCritical} critical${qaPrev.length?` (was ${qaCriticalPrev})`:''}.`);
+  const qaCritical = teamQa.critical, qaCriticalPrev = prevTeamQa.critical;
+  if(qaMonth.length>=20 && teamQaPassRate!==null){
+    const prevRate = prevTeamQa.pctSinFalla;
+    facts.push(`🧪 QA: ${qaMonth.length} reviews, ${teamQaPassRate.toFixed(1)}% no fault${prevRate!==null?` (${(teamQaPassRate-prevRate>=0?'+':'')}${(teamQaPassRate-prevRate).toFixed(1)} pts vs last month)`:''}; ${teamQa.bugs} bugs, ${qaCritical} of them critical${qaPrev.length?` (was ${qaCriticalPrev})`:''}; ${teamQa.oportunidades} opportunities.`);
   }
   const fuLevel = qaMonth.filter(r=>r.followUpLevel!==null && r.followUpLevel>=1);
   if(fuLevel.length){
@@ -3959,10 +3966,10 @@ function buildMonthlyMeeting(monthKey, scope){
   // team totals vs previous month (for the KPI deltas)
   const prevTeamCases = prevList.filter(r=>!r.isQueue && isCaseRow(r)).length;
   const prevTeamHours = prevList.filter(r=>!r.isQueue && r.loe!==null && !isNaN(r.loe)).reduce((s,r)=>s+r.loe,0)/60;
-  const prevQaPassRate = qaPrev.length ? (1-qaPrev.filter(isRealError).length/qaPrev.length)*100 : null;
+  const prevQaPassRate = prevTeamQa.pctSinFalla;
 
   return {
-    monthKey, prevKey, teamCases, teamHours, teamQaPassRate, teamQaTotal, activePeople: keys.length,
+    monthKey, prevKey, teamCases, teamHours, teamQaPassRate, teamQaTotal, teamQa, activePeople: keys.length,
     prevTeamCases, prevTeamHours, prevQaPassRate, followUps: fuCur,
     projectHighlights, projectHealth, groupHealth, facts, newPeopleCount: newPeople.length,
     trendMonths, trendCounts
@@ -4079,7 +4086,7 @@ function renderMonthly(){
     <div class="kpi-grid" style="margin-top:14px; margin-bottom:6px;">
       <div class="kpi"><div class="lbl">Cases completed</div><div class="val">${data.teamCases.toLocaleString('en-US')}</div>${momDelta(data.teamCases, data.prevTeamCases)}</div>
       <div class="kpi"><div class="lbl">Total hours logged</div><div class="val">${fmtHours(data.teamHours*60)}</div>${momDelta(data.teamHours, data.prevTeamHours)}</div>
-      <div class="kpi"><div class="lbl">Team QA pass rate</div><div class="val">${data.teamQaPassRate!==null?data.teamQaPassRate.toFixed(0)+'%':'—'}</div>${data.teamQaPassRate!==null && data.prevQaPassRate!==null ? momDelta(data.teamQaPassRate, data.prevQaPassRate, true) : ''}</div>
+      ${qaKpis(data.teamQa, data.prevQaPassRate)}
       <div class="kpi"><div class="lbl">Active people</div><div class="val">${data.activePeople}</div></div>
       ${data.followUps && data.followUps.total ? `<div class="kpi"><div class="lbl">Support / rework / re-checks</div><div class="val">${data.followUps.total.toLocaleString('en-US')}</div><div class="muted" style="font-size:10.5px;">not counted as cases</div></div>` : ''}
     </div>
@@ -4141,7 +4148,8 @@ async function generateMonthlyNarrative(){
     people_improved:h.improved, people_slipped:h.worsened, people_steady:h.steady, new_people:h.newCount });
   const payload = { month: monthFullLabel(monthKey), previous_month: monthFullLabel(data.prevKey),
     team: { cases:data.teamCases, cases_prev:data.prevTeamCases, hours:Math.round(data.teamHours), hours_prev:Math.round(data.prevTeamHours),
-      qa_pass_pct:data.teamQaPassRate!==null?+data.teamQaPassRate.toFixed(1):null, qa_pass_prev_pct:data.prevQaPassRate!==null?+data.prevQaPassRate.toFixed(1):null },
+      qa_no_fault_pct:data.teamQaPassRate!==null?+data.teamQaPassRate.toFixed(1):null, qa_no_fault_prev_pct:data.prevQaPassRate!==null?+data.prevQaPassRate.toFixed(1):null,
+      qa_bugs:data.teamQa.bugs, qa_opportunities:data.teamQa.oportunidades },
     projects:data.projectHealth.map(slim), groups:data.groupHealth.map(slim) };
   const prompt = `You are helping a team lead prepare a monthly team meeting for a digital operations team. Using ONLY the data below, write a short narrative (180-260 words, plain paragraphs, no markdown headers) about the health of the team this month vs. last month. Rules: never mention or guess any person's name; no rankings and no comparisons that pit people or groups against each other; talk about projects and groups as wholes. Cover: (1) overall volume/hours/QA direction, (2) capacity — how many people are in the expected range (80-120% of expected hours), below 50%, or above 120%, using counts only, (3) which projects or groups moved notably, (4) a constructive, supportive expectation for next month (e.g. where capacity is low we expect it to rise; where it is high we expect it to even out). Tone: factual, calm, encouraging. QA only applies where qa values are present (Landing Pages); do not invent QA for other projects.\n\nDATA (JSON):\n${JSON.stringify(payload)}`;
   try{
@@ -4246,6 +4254,16 @@ function qaCategoryCard(list){
   `;
 }
 
+// Cambio 34: the three QA groups as KPI tiles (bugs / opportunities / no fault), over closed reviews
+function qaKpis(q, prevNoFault){
+  const n = v => v.toLocaleString('en-US'), p1 = v => v===null ? '—' : v.toFixed(1)+'%';
+  const sub = t => `<div class="muted" style="font-size:10.5px;">${t}</div>`;
+  return `
+      <div class="kpi"><div class="lbl">QA bugs</div><div class="val">${n(q.bugs)}</div>${sub(`${p1(q.pctBugs)} · ${n(q.critical)} critical · ${n(q.failed)} failed`)}</div>
+      <div class="kpi"><div class="lbl">QA opportunities</div><div class="val">${n(q.oportunidades)}</div>${sub(`${p1(q.pctOportunidades)} · ${n(q.opportunity)} opportunity · ${n(q.observed)} observed`)}</div>
+      <div class="kpi"><div class="lbl">QA no fault</div><div class="val">${n(q.sinFalla)}</div>${sub(`${p1(q.pctSinFalla)} · ${n(q.passed)} passed · ${n(q.na)} NA`)}${q.pctSinFalla!==null && prevNoFault!==null && prevNoFault!==undefined ? momDelta(q.pctSinFalla, prevNoFault, true) : ''}</div>`;
+}
+
 function renderQA(){
   if(!Object.keys(QA_STORE).length){
     return `<div class="card"><h3>QA</h3><p class="muted">No QA data loaded yet. Upload the monthly QA status file (with "QA Status" / "QA Completed by" columns) to see this tab.</p></div>`;
@@ -4253,15 +4271,8 @@ function renderQA(){
   const list = qaFilteredRecords();
   if(drillQaPerson) return renderQaPersonDetail(list, drillQaPerson);
 
-  const statusCounts = {};
-  list.forEach(r=>{ statusCounts[r.qaStatus] = (statusCounts[r.qaStatus]||0)+1; });
-  const totalAll = list.length;
-  const inProgress = statusCounts['In progress']||0;
-  const resolvedTotal = totalAll - inProgress;
-  const errorCount = list.filter(isRealError).length;
-  const naCount = list.filter(r=>r.isNA).length;
-  const errorRate = resolvedTotal ? errorCount/resolvedTotal*100 : 0;
-  const passRate = resolvedTotal ? (statusCounts['Passed']||0)/resolvedTotal*100 : 0;
+  const qaAll = resumenQa(list);
+  const totalAll = qaAll.total, inProgress = qaAll.enCurso, naCount = qaAll.na;
   const escalated = list.filter(r=>r.followUpLevel!==null && r.followUpLevel>=2).length;
   const hasFollowUpData = list.some(r=>r.followUpLevel!==null);
 
@@ -4269,19 +4280,11 @@ function renderQA(){
   const bySpecialist = {};
   list.forEach(r=>{
     const k = r.ownerKey;
-    if(!bySpecialist[k]) bySpecialist[k] = { display:r.ownerDisplay, total:0, passed:0, failed:0, critical:0, observed:0, opportunity:0, inProgress:0, fu1:0, fu2:0, fu3:0, na:0, realErrors:0, byMonth:{} };
+    if(!bySpecialist[k]) bySpecialist[k] = { display:r.ownerDisplay, list:[], fu1:0, fu2:0, fu3:0, byMonth:{} };
     const b = bySpecialist[k];
-    b.total++;
-    if(r.qaStatus==='Passed') b.passed++;
-    else if(r.qaStatus==='Failed') b.failed++;
-    else if(r.qaStatus==='Critical') b.critical++;
-    else if(r.qaStatus==='Observed') b.observed++;
-    else if(r.qaStatus==='Opportunity') b.opportunity++;
-    else if(r.qaStatus==='In progress') b.inProgress++;
-    if(r.isNA) b.na++;
-    if(isRealError(r)) b.realErrors++;
+    b.list.push(r);
     if(r.followUpLevel!==null && r.followUpLevel>=1){ if(r.followUpLevel>=3) b.fu3++; else if(r.followUpLevel===2) b.fu2++; else b.fu1++; }
-    if(r.dateCompleted){
+    if(r.dateCompleted && esCerradaQa(r)){
       const mk = periodKey(r.dateCompleted, 'month');
       if(!b.byMonth[mk]) b.byMonth[mk] = {total:0, error:0};
       b.byMonth[mk].total++;
@@ -4290,8 +4293,8 @@ function renderQA(){
   });
 
   let specialistRows = Object.entries(bySpecialist).map(([key,b])=>{
-    const resolved = b.total - b.inProgress;
-    const errRate = resolved ? b.realErrors/resolved*100 : 0;
+    const q = resumenQa(b.list);
+    const errRate = q.pctBugs ?? 0;
     const mkeys = Object.keys(b.byMonth).sort();
     const monthlyRates = mkeys.map(mk=>{ const m=b.byMonth[mk]; return m.total? m.error/m.total*100 : 0; });
     const streak = trailingStreak(monthlyRates, aiAlertSettings.qaWorseningMonths);
@@ -4301,10 +4304,9 @@ function renderQA(){
     if(streak.worsening) trend = 'worsening';
     else if(streak.improving) trend = 'improving';
     else if(monthlyRates.length>=2) trend = 'stable';
-    const aiEligible = b.total>=aiAlertSettings.qaMinReviews
+    const aiEligible = q.cerradas>=aiAlertSettings.qaMinReviews
       && (errRate>=aiAlertSettings.qaCoachingThreshold || streak.worsening);
-    return { key, display:b.display, total:b.total, passed:b.passed, failed:b.failed, critical:b.critical,
-      observed:b.observed, opportunity:b.opportunity, na:b.na, errorRate:errRate, trend, aiEligible, fu1:b.fu1, fu2:b.fu2, fu3:b.fu3, fuTotal:b.fu1+b.fu2+b.fu3 };
+    return { key, display:b.display, ...q, errorRate:errRate, trend, aiEligible, fu1:b.fu1, fu2:b.fu2, fu3:b.fu3, fuTotal:b.fu1+b.fu2+b.fu3 };
   });
   if(tableSearch.qaSpecialist) specialistRows = specialistRows.filter(r=>r.display.toLowerCase().includes(tableSearch.qaSpecialist.toLowerCase()));
   specialistRows = sortRows(specialistRows, tableSort.qaSpecialist);
@@ -4315,24 +4317,23 @@ function renderQA(){
 
   const specialistRowsHtml = specialistRows.map(r=>{
     const former = FORMER_EMPLOYEES.has(r.key);
-    const alert = !former && r.total>=aiAlertSettings.qaMinReviews && r.errorRate>aiAlertSettings.qaBadgeThreshold;
+    const alert = !former && r.cerradas>=aiAlertSettings.qaMinReviews && r.errorRate>aiAlertSettings.qaBadgeThreshold;
     const showAiBtn = !former && r.aiEligible && aiVisible('coaching_note');
     const trendHtml = r.trend===null ? '<span class="muted">—</span>'
-      : r.trend==='worsening' ? `<span class="badge bad" title="Fail+critical rate rose for ${aiAlertSettings.qaWorseningMonths} months in a row">▲ worsening (${aiAlertSettings.qaWorseningMonths}m)</span>`
-      : r.trend==='improving' ? `<span class="badge ok" title="Fail+critical rate fell for ${aiAlertSettings.qaWorseningMonths} months in a row">▼ improving (${aiAlertSettings.qaWorseningMonths}m)</span>`
+      : r.trend==='worsening' ? `<span class="badge bad" title="Bug rate rose for ${aiAlertSettings.qaWorseningMonths} months in a row">▲ worsening (${aiAlertSettings.qaWorseningMonths}m)</span>`
+      : r.trend==='improving' ? `<span class="badge ok" title="Bug rate fell for ${aiAlertSettings.qaWorseningMonths} months in a row">▼ improving (${aiAlertSettings.qaWorseningMonths}m)</span>`
       : `<span class="badge neutral">stable</span>`;
     const followUpHtml = !hasFollowUpData ? '<span class="muted">—</span>'
       : r.fuTotal===0 ? '<span class="muted">—</span>'
       : `<span title="Number of cases that needed a 1st / 2nd / 3rd+ follow-up">${r.fu1} 1st · ${r.fu2} 2nd${r.fu3?` · ${r.fu3} 3rd+`:''}</span>`;
     return `<tr${former?' class="former-row"':''}>
-      <td><span class="person-link" onclick="drillQaPerson='${esc(r.key)}'; renderTabContent();">${esc(r.display)}</span>${former?' <span class="badge neutral" style="font-size:9.5px;">former</span>':''}${r.na?` <span class="muted" style="font-size:10px;" title="Excluded from error rate — Fix Comment was NA">(${r.na} NA)</span>`:''}${alert?` <span class="badge bad" title="Real fail+critical rate above ${aiAlertSettings.qaBadgeThreshold}% (NA-flagged issues excluded)">⚠ high error rate</span>`:''}${showAiBtn?` <button class="btn small" style="font-size:10.5px; padding:2px 6px;" onclick="draftCoachingNote('${esc(r.key)}')">✨ AI coaching note</button>`:''}</td>
+      <td><span class="person-link" onclick="drillQaPerson='${esc(r.key)}'; renderTabContent();">${esc(r.display)}</span>${former?' <span class="badge neutral" style="font-size:9.5px;">former</span>':''}${alert?` <span class="badge bad" title="Bug rate above ${aiAlertSettings.qaBadgeThreshold}% of closed reviews">⚠ high error rate</span>`:''}${showAiBtn?` <button class="btn small" style="font-size:10.5px; padding:2px 6px;" onclick="draftCoachingNote('${esc(r.key)}')">✨ AI coaching note</button>`:''}</td>
       <td class="num">${r.total}</td>
-      <td class="num">${r.passed}</td>
-      <td class="num">${r.failed}</td>
-      <td class="num">${r.critical}</td>
-      <td class="num">${r.observed}</td>
-      <td class="num">${r.opportunity}</td>
+      <td class="num">${r.bugs} <span class="muted" style="font-size:10.5px;">(${r.critical} · ${r.failed})</span></td>
       <td class="num">${pct(r.errorRate)}</td>
+      <td class="num">${r.oportunidades} <span class="muted" style="font-size:10.5px;">(${r.opportunity} · ${r.observed})</span></td>
+      <td class="num">${r.sinFalla} <span class="muted" style="font-size:10.5px;">(${r.passed} · ${r.na})</span></td>
+      <td class="num">${r.enCurso}</td>
       <td>${trendHtml}</td>
       ${hasFollowUpData ? `<td>${followUpHtml}</td>` : ''}
     </tr>`;
@@ -4344,7 +4345,7 @@ function renderQA(){
     const k = r.qaType || 'Not specified';
     if(!byType[k]) byType[k] = {total:0, error:0, resolved:0};
     byType[k].total++;
-    if(r.qaStatus!=='In progress'){
+    if(esCerradaQa(r)){
       byType[k].resolved++;
       if(isRealError(r)) byType[k].error++;
     }
@@ -4365,7 +4366,7 @@ function renderQA(){
   list.forEach(r=>{
     const rk = r.reviewerDisplay || 'Not specified';
     reviewerTotalForNA[rk] = (reviewerTotalForNA[rk]||0)+1;
-    if(r.isNA){
+    if(esNaAplicado(r)){
       naByReviewer[rk] = (naByReviewer[rk]||0)+1;
       const ok = r.ownerDisplay || 'Not specified';
       naByOwner[ok] = (naByOwner[ok]||0)+1;
@@ -4407,42 +4408,39 @@ function renderQA(){
     </div>
     <div class="kpi-grid">
       <div class="kpi"><div class="lbl">QA reviews</div><div class="val">${totalAll.toLocaleString('en-US')}</div></div>
-      <div class="kpi"><div class="lbl">Pass rate</div><div class="val">${pct(passRate)}</div></div>
-      <div class="kpi"><div class="lbl">Fail + Critical rate</div><div class="val">${pct(errorRate)}</div></div>
-      <div class="kpi"><div class="lbl">Critical</div><div class="val">${(statusCounts['Critical']||0).toLocaleString('en-US')}</div></div>
-      <div class="kpi"><div class="lbl">In progress</div><div class="val">${inProgress.toLocaleString('en-US')}</div></div>
+      ${qaKpis(qaAll)}
+      <div class="kpi"><div class="lbl">In progress</div><div class="val">${inProgress.toLocaleString('en-US')}</div><div class="muted" style="font-size:10.5px;">not counted in any rate</div></div>
       ${hasFollowUpData ? `<div class="kpi"><div class="lbl">Escalated (2+ follow-ups)</div><div class="val">${escalated.toLocaleString('en-US')}</div></div>` : ''}
     </div>
-    <p class="muted" style="font-size:11.5px; margin:-8px 0 16px;">Project/person/work-type filters are for casework data and don't map onto QA categories.</p>
+    <p class="muted" style="font-size:11.5px; margin:-8px 0 16px;">Bugs = Failed/Critical. Opportunities (Opportunity/Observed) are not bugs. An NA answer from the specialist counts as no fault; an answer that mixes NA and Fixed is a bug. Rates are over closed reviews (In progress left out) and add up to 100%. Project/person/work-type filters are for casework data and don't map onto QA categories.</p>
 
     <div class="card">
-      <h3>Monthly pass vs. fail+critical rate</h3>
+      <h3>Monthly bugs, opportunities and no fault (% of closed reviews)</h3>
       <div style="height:220px;"><canvas id="chartQaTrend"></canvas></div>
     </div>
 
     <div class="card">
-      <h3>By specialist (click a name for detail) — ${aiAlertSettings.qaBadgeThreshold}%+ fail+critical rate flagged, ${aiAlertSettings.qaMinReviews}+ reviews minimum</h3>
+      <h3>By specialist (click a name for detail) — ${aiAlertSettings.qaBadgeThreshold}%+ bug rate flagged, ${aiAlertSettings.qaMinReviews}+ closed reviews minimum</h3>
       <input type="text" id="search_qaSpecialist" placeholder="Search specialist…" value="${esc(tableSearch.qaSpecialist)}" style="margin-bottom:10px; width:220px;">
       <table><thead><tr>
         ${sortableTh('qaSpecialist','display','Specialist')}
         ${sortableTh('qaSpecialist','total','Total')}
-        ${sortableTh('qaSpecialist','passed','Passed')}
-        ${sortableTh('qaSpecialist','failed','Failed')}
-        ${sortableTh('qaSpecialist','critical','Critical')}
-        ${sortableTh('qaSpecialist','observed','Observed')}
-        ${sortableTh('qaSpecialist','opportunity','Opportunity')}
-        ${sortableTh('qaSpecialist','errorRate','Fail+Crit %')}
+        ${sortableTh('qaSpecialist','bugs','Bugs (Critical · Failed)')}
+        ${sortableTh('qaSpecialist','errorRate','Bugs %')}
+        ${sortableTh('qaSpecialist','oportunidades','Opportunities (Opportunity · Observed)')}
+        ${sortableTh('qaSpecialist','sinFalla','No fault (Passed · NA)')}
+        ${sortableTh('qaSpecialist','enCurso','In progress')}
         <th>Trend</th>
         ${hasFollowUpData ? sortableTh('qaSpecialist','fuTotal','Follow-ups (1st · 2nd · 3rd+)') : ''}
-      </tr></thead><tbody>${specialistRowsHtml || `<tr><td colspan="${hasFollowUpData?10:9}" class="empty">No matches.</td></tr>`}</tbody></table>
+      </tr></thead><tbody>${specialistRowsHtml || `<tr><td colspan="${hasFollowUpData?9:8}" class="empty">No matches.</td></tr>`}</tbody></table>
       ${hasFollowUpData ? '<p class="muted" style="font-size:11px; margin-top:8px;">Follow-ups = how many of their cases reached a 1st, 2nd or 3rd+ follow-up (no QA Fix Comment reaction yet), in the filtered range.</p>' : ''}
     </div>
 
     <div class="card">
-      <h3>NA overview — flagged issues that weren't real errors</h3>
-      <p class="muted" style="font-size:11.5px; margin-bottom:10px;">When a reviewer marks the Fix Comment "NA", the flagged issue turned out not to be a real error (duplicate case, not the specialist's fault, already fixed, etc.). These are excluded from every error rate on this page — this is just visibility into how often it happens.</p>
+      <h3>NA overview — findings the specialist answered NA (count as no fault)</h3>
+      <p class="muted" style="font-size:11.5px; margin-bottom:10px;">When the specialist answers a finding with "NA" / "N/A" (not their fault, out of scope, already like that...), it counts as no fault everywhere on this page. If the answer also says something was fixed, it stays a bug. This card shows how often it happens.</p>
       <div class="kpi-grid" style="margin-bottom:14px;">
-        <div class="kpi"><div class="lbl">Total NA (excluded)</div><div class="val">${naCount.toLocaleString('en-US')}</div></div>
+        <div class="kpi"><div class="lbl">NA (counted as no fault)</div><div class="val">${naCount.toLocaleString('en-US')}</div></div>
         <div class="kpi"><div class="lbl">Share of all reviews</div><div class="val">${pct(totalAll?naCount/totalAll*100:0)}</div></div>
       </div>
       <div style="display:flex; gap:24px; flex-wrap:wrap;">
@@ -4477,11 +4475,11 @@ function renderQA(){
     </div>
 
     <div class="card">
-      <h3>By case type — compliance candidates (highest fail+critical rate first)</h3>
+      <h3>By case type — compliance candidates (highest bug rate first)</h3>
       <table><thead><tr>
         ${sortableTh('qaType','type','Type')}
         ${sortableTh('qaType','total','Total reviewed')}
-        ${sortableTh('qaType','errorRate','Fail+Crit %')}
+        ${sortableTh('qaType','errorRate','Bugs %')}
       </tr></thead><tbody>${typeRows.map(r=>`<tr>
         <td>${esc(r.type)}</td>
         <td class="num">${r.total}</td>
@@ -4504,11 +4502,7 @@ function renderQaPersonDetail(list, key){
   if(!person.length){ drillQaPerson=null; return renderQA(); }
   const display = person[0].ownerDisplay;
   const total = person.length;
-  const counts = {};
-  person.forEach(r=>{ counts[r.qaStatus] = (counts[r.qaStatus]||0)+1; });
-  const resolved = total - (counts['In progress']||0);
-  const realErrors = person.filter(isRealError).length;
-  const errRate = resolved ? realErrors/resolved*100 : 0;
+  const q = resumenQa(person);
   const issues = person.filter(r=>r.qaStatus==='Failed'||r.qaStatus==='Critical')
     .sort((a,b)=>(b.dateCompleted?b.dateCompleted.getTime():0)-(a.dateCompleted?a.dateCompleted.getTime():0))
     .slice(0,20);
@@ -4516,17 +4510,15 @@ function renderQaPersonDetail(list, key){
     <button class="btn" onclick="drillQaPerson=null; renderTabContent();" style="margin-bottom:14px;">← Back to QA</button>
     <h2 style="margin-bottom:14px;">${esc(display)}</h2>
     <div class="kpi-grid">
-      <div class="kpi"><div class="lbl">Total reviewed</div><div class="val">${total}</div></div>
-      <div class="kpi"><div class="lbl">Fail+Critical rate</div><div class="val">${pct(errRate)}</div></div>
-      <div class="kpi"><div class="lbl">Failed</div><div class="val">${counts['Failed']||0}</div></div>
-      <div class="kpi"><div class="lbl">Critical</div><div class="val">${counts['Critical']||0}</div></div>
+      <div class="kpi"><div class="lbl">Total reviewed</div><div class="val">${total}</div>${q.enCurso?`<div class="muted" style="font-size:10.5px;">${q.enCurso} in progress</div>`:''}</div>
+      ${qaKpis(q)}
     </div>
     <div class="card">
       <h3>Most recent Failed / Critical cases</h3>
       <table><thead><tr><th>Case</th><th>Status</th><th>Date</th><th>Reviewer</th><th>Follow-up</th><th>Comment</th><th>Fix comment</th></tr></thead>
       <tbody>${issues.map(r=>`<tr>
         <td>${esc(r.caseId||'—')}</td>
-        <td><span class="badge bad">${esc(r.qaStatus)}</span>${r.isNA?' <span class="badge neutral" style="font-size:9.5px;" title="Fix Comment was NA — not counted as a real error">NA</span>':''}</td>
+        <td><span class="badge ${isRealError(r)?'bad':'neutral'}">${esc(r.qaStatus)}</span>${esNaAplicado(r)?' <span class="badge neutral" style="font-size:9.5px;" title="The specialist answered NA — counts as no fault">NA · no fault</span>':''}</td>
         <td class="mono">${fmtDate(r.dateCompleted)}</td>
         <td>${esc(r.reviewerDisplay||'—')}</td>
         <td>${r.followUpLevel? `<span class="badge ${r.followUpLevel>=2?'bad':'warn'}">${r.followUpLevel}º</span>` : '<span class="muted">—</span>'}</td>
@@ -4548,24 +4540,28 @@ function mountQaCharts(){
   list.forEach(r=>{
     if(!r.dateCompleted) return;
     const k = periodKey(r.dateCompleted, 'month');
-    if(!byMonth[k]) byMonth[k] = {resolved:0, error:0, passed:0};
-    if(r.qaStatus!=='In progress'){
+    if(!byMonth[k]) byMonth[k] = {resolved:0, error:0, passed:0, opp:0};
+    const c = claseQa(r);
+    if(esCerradaQa(r)){
       byMonth[k].resolved++;
-      if(isRealError(r)) byMonth[k].error++;
-      if(r.qaStatus==='Passed') byMonth[k].passed++;
+      if(c==='bug') byMonth[k].error++;
+      else if(c==='oportunidad') byMonth[k].opp++;
+      else byMonth[k].passed++;
     }
   });
   const keys = Object.keys(byMonth).sort();
   const labels = keys.map(k=>periodLabel(k,'month'));
   const passData = keys.map(k=> byMonth[k].resolved ? +(byMonth[k].passed/byMonth[k].resolved*100).toFixed(1) : null);
   const errData = keys.map(k=> byMonth[k].resolved ? +(byMonth[k].error/byMonth[k].resolved*100).toFixed(1) : null);
+  const oppData = keys.map(k=> byMonth[k].resolved ? +(byMonth[k].opp/byMonth[k].resolved*100).toFixed(1) : null);
   const canvas = document.getElementById('chartQaTrend');
   if(!canvas) return;
   chartInstances.qaTrend = new Chart(canvas, {
     type:'line',
     data:{ labels, datasets:[
-      { label:'Pass rate %', data:passData, borderColor:'#1F9254', backgroundColor:'rgba(31,146,84,.12)', tension:.3, fill:false },
-      { label:'Fail+Critical rate %', data:errData, borderColor:'#D64545', backgroundColor:'rgba(214,69,69,.12)', tension:.3, fill:false }
+      { label:'No fault %', data:passData, borderColor:'#1F9254', backgroundColor:'rgba(31,146,84,.12)', tension:.3, fill:false },
+      { label:'Opportunities %', data:oppData, borderColor:'#B7791F', backgroundColor:'rgba(183,121,31,.12)', tension:.3, fill:false },
+      { label:'Bugs %', data:errData, borderColor:'#D64545', backgroundColor:'rgba(214,69,69,.12)', tension:.3, fill:false }
     ]},
     options:{ responsive:true, maintainAspectRatio:false,
       plugins:{ legend:{ position:'bottom', labels:{boxWidth:10, font:{size:11}} } },
@@ -5921,6 +5917,8 @@ async function refreshSyncEpochAfterOwnChange(){
 (async function init(){
   try{ crearRepartoEquipos = (await import('../src/perf/equipos.js')).crearReparto; rehacerReparto(); }
   catch(e){ console.error('Team split rule not loaded (src/perf/equipos.js)', e); }
+  try{ REGLAS_QA = await import('../src/perf/qa.js'); }
+  catch(e){ console.error('QA rules not loaded (src/perf/qa.js)', e); showSaveNotice('Could not load the QA rules: QA numbers are not available. Reload the page.', true); }
   // A shared snapshot file already carries its own data and needs no sign-in.
   if(window.__PRELOADED__ && Array.isArray(window.__PRELOADED__)){
     hideAuth();

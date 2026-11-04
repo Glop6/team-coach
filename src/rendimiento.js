@@ -57,7 +57,7 @@ function construirModelo(perf, data, bamboo) {
   for (const p of perf.people) {
     const tc = p.tc_person_id ? tcPeople.get(p.tc_person_id) ?? null : null;
     personas.set(p.id, { id: p.id, nombre: tc?.full_name ?? p.full_name, clave: claveNombre(p.full_name), active: p.active, tc, group_id: tc?.group_id ?? null,
-      cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), proj: meses.map(() => ({})), hora: Array(24).fill(0), dia: Array(7).fill(0),
+      cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), qaCrit: cero(), qaOpp: cero(), qaObs: cero(), qaSin: cero(), qaNa: cero(), proj: meses.map(() => ({})), hora: Array(24).fill(0), dia: Array(7).fill(0),
       inc: cero(), kudos: cero(), reuniones: [], bamboo: meses.map(() => null), conCasos: false });
   }
   for (const r of perf.casos) {
@@ -71,7 +71,7 @@ function construirModelo(perf, data, bamboo) {
   for (const r of perf.qa) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
     if (!p || i === undefined) continue;
-    p.qaTot[i] += r.total; p.qaErr[i] += r.errores; p.qaProg[i] += r.en_progreso;
+    sumarQa(p, i, r);
   }
   for (const r of perf.horario) { const p = personas.get(r.person_id); if (p) { p.hora[r.hora] += r.casos; p.dia[r.dia - 1] += r.casos; } }
   const porTc = new Map([...personas.values()].filter((p) => p.tc).map((p) => [p.tc.id, p]));
@@ -102,7 +102,7 @@ function seriesEquipos(perf, personas, iMes) {
   if (!perf.equipos) return null;
   const rep = crearReparto(perf.equipos);
   for (const p of personas.values()) p.equipo = rep.persona(p.clave);   // equipo dedicado (para la etiqueta de las tarjetas de grupo)
-  const eqs = Object.fromEntries(EQUIPOS.map((k) => [k, { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), gente: cero().map(() => new Set()) }]));
+  const eqs = Object.fromEntries(EQUIPOS.map((k) => [k, { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), qaCrit: cero(), qaOpp: cero(), qaObs: cero(), qaSin: cero(), qaNa: cero(), gente: cero().map(() => new Set()) }]));
   for (const r of perf.casos) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
     if (!p || i === undefined) continue;
@@ -114,18 +114,30 @@ function seriesEquipos(perf, personas, iMes) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
     if (!p || i === undefined) continue;
     const s = eqs[rep.qa(p.clave)];
-    s.qaTot[i] += r.total; s.qaErr[i] += r.errores; s.qaProg[i] += r.en_progreso;
+    sumarQa(s, i, r);
   }
   return eqs;
 }
 
 // Suma de varias personas (un grupo, el equipo)
 function serie(ps) {
-  const s = { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), inc: cero(), kudos: cero() };
+  const s = { cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), qaCrit: cero(), qaOpp: cero(), qaObs: cero(), qaSin: cero(), qaNa: cero(), inc: cero(), kudos: cero() };
   for (const p of ps) for (const k of Object.keys(s)) p[k].forEach((v, i) => (s[k][i] += v));
   return s;
 }
-const tasaError = (s, i) => { const r = s.qaTot[i] - s.qaProg[i]; return r > 0 ? (s.qaErr[i] / r) * 100 : null; };
+// Cambio 34: QA en tres grupos (reglas en perf/qa.js; resumen_qa las aplica en la base). errores = bugs.
+// Sin el SQL 23 llegan solo total / errores / en_progreso: lo que no es bug cuenta como sin falla.
+function sumarQa(s, i, r) {
+  s.qaTot[i] += r.total; s.qaErr[i] += r.errores; s.qaProg[i] += r.en_progreso;
+  s.qaCrit[i] += r.criticos ?? 0; s.qaOpp[i] += r.oportunidades ?? 0; s.qaObs[i] += r.observados ?? 0; s.qaNa[i] += r.na ?? 0;
+  s.qaSin[i] += r.sin_falla ?? r.total - r.errores - r.en_progreso;
+}
+// Porcentajes sobre las revisiones cerradas (sin las que están en curso): bugs + oportunidades + sin falla = 100 %
+const qaCerradas = (s, i) => s.qaErr[i] + s.qaOpp[i] + s.qaSin[i];
+const tasaError = (s, i) => { const c = qaCerradas(s, i); return c > 0 ? (s.qaErr[i] / c) * 100 : null; };
+// "178 bugs · 46 oportunidades (46 · 0) · 1.733 sin falla (1.680 · 53)"
+const desgloseQa = (s, i) => t("{b} bugs · {o} oportunidades ({op} · {ob}) · {s} sin falla ({p} · {na})", {
+  b: nf(s.qaErr[i]), o: nf(s.qaOpp[i]), op: nf(s.qaOpp[i] - s.qaObs[i]), ob: nf(s.qaObs[i]), s: nf(s.qaSin[i]), p: nf(s.qaSin[i] - s.qaNa[i]), na: nf(s.qaNa[i]) });
 // Tendencia: promedio de los 3 meses hasta i contra los 3 anteriores (±5 %)
 function tendencia(vals, i) {
   const a = vals.slice(Math.max(0, i - 2), i + 1), b = vals.slice(Math.max(0, i - 5), Math.max(0, i - 2));
@@ -268,7 +280,7 @@ function Kpis({ s, meses, i, color, cuarto }) {
   return html`<div class="rd-kpis">
     <${Kpi} etiqueta=${t("Casos en {m}", { m: mesLargo(meses[i]) })} valor=${nf(s.cases[i])} debajo=${html`${vsAnterior(s.cases[i], s.cases[i - 1], ant)} <span class="pill">${tc.txt}</span>`} extra=${html`<${Linea} vals=${s.cases.slice(0, i + 1)} color=${color} />`} />
     <${Kpi} etiqueta=${t("Horas en casos (LOE)")} valor=${nf(hrs(s.loe[i]))} unidad="h" debajo=${html`${vsAnterior(s.loe[i], s.loe[i - 1], ant)} <span class="pill">${tl.txt}</span>`} extra=${html`<${Linea} vals=${s.loe.slice(0, i + 1)} color=${color} />`} />
-    <${Kpi} etiqueta=${t("Errores reales en QA")} valor=${e == null ? "—" : nf(e, 1)} unidad=${e == null ? "" : "%"} debajo=${t("{e} de {n} revisiones", { e: nf(s.qaErr[i]), n: nf(s.qaTot[i]) })} extra=${qaPill && html`<div class="rd-kpi-x">${qaPill}</div>`} />
+    <${Kpi} etiqueta=${t("Bugs en QA")} valor=${e == null ? "—" : nf(e, 1)} unidad=${e == null ? "" : "%"} debajo=${e == null ? t("Sin QA") : desgloseQa(s, i)} extra=${qaPill && html`<div class="rd-kpi-x">${qaPill}</div>`} />
     ${cuarto}
   </div>`;
 }
@@ -286,8 +298,9 @@ function Equipos({ eqs, meses, i }) {
       <div class="rd-kpi-c">${vsAnterior(s.cases[i], s.cases[i - 1], ant)}</div>
       <${Linea} vals=${s.cases.slice(0, i + 1)} />
       <div class="rd-kpi-c rd-eq-datos"><span>${nf(hrs(s.loe[i]))} h</span>
-        <span>${e == null ? t("Sin QA") : t("{p}% errores en QA", { p: nf(e, 1) })}</span>
+        <span>${e == null ? t("Sin QA") : t("{p}% bugs en QA", { p: nf(e, 1) })}</span>
         <span>${n === 1 ? t("1 persona") : t("{n} personas", { n: nf(n) })}</span></div>
+      ${e != null && html`<div class="small muted rd-eq-qa">${desgloseQa(s, i)}</div>`}
     </div>`;
   })}</div>
   <p class="small muted rd-eq-total">${t("Total del equipo: {n} casos y tareas · {h} h. Incluye a los ex-miembros, igual que el Monthly Meeting.", { n: nf(total), h: nf(horas) })}</p>`;
@@ -315,10 +328,10 @@ function fraseDelMes(s, meses, i, tu, nombre) {
     partes[0] += d === 0 ? t(", igual que en {m}.", { m: mesNombre(meses[i - 1]) }) : d > 0 ? t(", {p}% más que en {m}.", { p: d, m: mesNombre(meses[i - 1]) }) : t(", {p}% menos que en {m}.", { p: -d, m: mesNombre(meses[i - 1]) });
   } else partes[0] += ".";
   partes.push(tu ? t("Dedicaste {h} horas a casos.", { h: nf(hrs(s.loe[i])) }) : t("Dedicó {h} horas a casos.", { h: nf(hrs(s.loe[i])) }));
-  if (e != null) partes.push(eb == null ? t("Los errores reales en QA fueron {e}%.", { e: nf(e, 1) })
-    : e < eb - 0.3 ? t("Los errores reales en QA bajaron a {e}% (antes {b}%).", { e: nf(e, 1), b: nf(eb, 1) })
-    : e > eb + 0.3 ? t("Los errores reales en QA subieron a {e}% (antes {b}%).", { e: nf(e, 1), b: nf(eb, 1) })
-    : t("Los errores reales en QA se mantuvieron en {e}%.", { e: nf(e, 1) }));
+  if (e != null) partes.push(eb == null ? t("Los bugs en QA fueron {e}%.", { e: nf(e, 1) })
+    : e < eb - 0.3 ? t("Los bugs en QA bajaron a {e}% (antes {b}%).", { e: nf(e, 1), b: nf(eb, 1) })
+    : e > eb + 0.3 ? t("Los bugs en QA subieron a {e}% (antes {b}%).", { e: nf(e, 1), b: nf(eb, 1) })
+    : t("Los bugs en QA se mantuvieron en {e}%.", { e: nf(e, 1) }));
   const tr = tendencia(s.cases, i).k;
   if (tr) partes.push({ sube: t("En los últimos tres meses, el volumen sube."), baja: t("En los últimos tres meses, el volumen baja."), estable: t("En los últimos tres meses, el volumen se mantiene.") }[tr]);
   if (s.kudos[i]) partes.push(tu ? t("Recibiste {n} kudos.", { n: s.kudos[i] }) : t("Recibió {n} kudos.", { n: s.kudos[i] }));
@@ -481,7 +494,7 @@ export function RendimientoPersona({ id }) {
           <section class="rd-card"><h2>${t("Horas en casos")}</h2><p class="rd-sub">${t("LOE por mes")}</p><${Barras} vals=${p.loe.map(hrs)} meses=${meses} sel=${sel} fmt=${(v) => nf(v, 1) + " h"} ancho=${320} etiqueta=${t("Horas en casos")} /></section>
           <section class="rd-card"><h2>${yo ? t("Cuándo trabajo") : t("Cuándo trabaja")}</h2><p class="rd-sub">${t("Casos por hora y día de la semana, últimos 3 meses")}</p><${Horario} p=${p} /></section>
           <section class="rd-card"><h2>${yo ? t("En qué trabajé") : t("En qué trabajó")}</h2><p class="rd-sub">${t("Casos por proyecto, {m}", { m: mesLargo(meses[sel]) })}</p>${proj.length ? html`<${BarrasH} filas=${proj} />` : html`<p class="small muted">${t("Sin casos en este mes.")}</p>`}</section>
-          <section class="rd-card"><h2>${t("QA")}</h2><p class="rd-sub">${t("Errores reales por mes")}</p><${Barras} vals=${meses.map((_, i) => tasaError(p, i))} meses=${meses} sel=${sel} fmt=${(v) => nf(v, 1) + "%"} ancho=${320} etiqueta=${t("Errores reales en QA")} /></section>
+          <section class="rd-card"><h2>${t("QA")}</h2><p class="rd-sub">${t("Bugs por mes, % de las revisiones cerradas")}</p><${Barras} vals=${meses.map((_, i) => tasaError(p, i))} meses=${meses} sel=${sel} fmt=${(v) => nf(v, 1) + "%"} ancho=${320} etiqueta=${t("Bugs en QA")} />${qaCerradas(p, sel) > 0 && html`<p class="small muted">${desgloseQa(p, sel)}</p>`}</section>
         </div>
       </div>
       <section class="rd-card"><h2>${t("En Team Coach")}</h2><p class="rd-sub">${t("Lo que pasó alrededor de los números")}</p>
