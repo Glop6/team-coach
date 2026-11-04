@@ -14,21 +14,30 @@ const html = htm.bind(h);
 // ---------------------------------------------------------------------
 // Fechas y reglas (las mismas que la función bamboo-sync)
 // ---------------------------------------------------------------------
-const TZ = -4;                        // Bolivia: la fecha límite es el lunes siguiente a las 8:00 (hora de Bolivia)
+const TZ = -4;                        // Bolivia: la fecha límite es el lunes siguiente a las 8:00 (hora de Bolivia), o el día después de su último día para quien trabaja de domingo a lunes
 const HORA_LIMITE = 8;
 const TOL = 0.01;
 const DIAS_ES = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
 const DIAS_EN = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const DIAS_LARGOS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"];
+const DIAS_LARGOS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 const MESES_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
 const MESES_EN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
 const DIAS = () => (getLang() === "en" ? DIAS_EN : DIAS_ES);
+const DIAS_LARGOS = () => (getLang() === "en" ? DIAS_LARGOS_EN : DIAS_LARGOS_ES);
 const MESES = () => (getLang() === "en" ? MESES_EN : MESES_ES);
 const toDate = (s) => new Date(s + "T00:00:00Z");
 const iso = (d) => d.toISOString().slice(0, 10);
 export const addDays = (s, n) => iso(new Date(toDate(s).getTime() + n * 86400000));
 const weekday = (s) => (toDate(s).getUTCDay() + 6) % 7;
 const lunesDe = (s) => addDays(s, -weekday(s));
-const limiteDe = (s) => toDate(addDays(lunesDe(s), 7)).getTime() + HORA_LIMITE * 3600000;
+// Cambio 36: la semana de cada persona termina en week_end (0 = lunes … 6 = domingo; lo calcula bamboo-sync con
+// finSemana desde su horario). Vence el día siguiente a la hora límite: lunes 8:00, o martes 8:00 si trabaja de jueves a lunes.
+const FIN_SEMANA = new Map();                             // bamboo_id -> week_end (lo llena indexBamboo)
+const finSemanaDe = (bid) => FIN_SEMANA.get(bid) ?? 6;
+const limiteDe = (s, fin = 6) => toDate(addDays(s, ((fin - weekday(s) + 7) % 7) + 1)).getTime() + HORA_LIMITE * 3600000;
+// Igual que en bamboo-sync: si sus días cruzan de domingo a lunes, la semana termina en su último día laborable
+const finSemana = (dias) => { const set = new Set(dias); if (set.size >= 7 || !set.has(6) || !set.has(0)) return 6; let e = 0; while (set.has(e + 1)) e++; return e; };
 let _now = null;                                          // para pruebas: window.__TC_NOW = "2026-10-26T10:00"
 const nowLocal = () => _now ?? (typeof window !== "undefined" && window.__TC_NOW ? Date.parse(window.__TC_NOW + "Z") : Date.now() + TZ * 3600000);
 export const hoyLocal = () => iso(new Date(nowLocal()));
@@ -53,7 +62,7 @@ const hace = (ts) => {
 
 /** Estado al momento de mirar: un día "en plazo" pasa a falta/parcial cuando vence. */
 export function estado(d) {
-  if (d.state === "en_plazo" && nowLocal() >= limiteDe(d.day)) return Number(d.hours) <= TOL ? "falta" : "parcial";
+  if (d.state === "en_plazo" && nowLocal() >= limiteDe(d.day, finSemanaDe(d.bamboo_id))) return Number(d.hours) <= TOL ? "falta" : "parcial";
   return d.state;
 }
 const PROBLEMA = ["falta", "parcial"];
@@ -125,6 +134,7 @@ const tono = (pct, pend) => (pct < 95 ? "low" : pend || pct < 99 ? "mid" : "");
 // ---------------------------------------------------------------------
 export function indexBamboo(bb) {
   const emps = new Map((bb.employees ?? []).map((e) => [e.bamboo_id, e]));
+  for (const e of emps.values()) if (e.week_end != null) FIN_SEMANA.set(e.bamboo_id, e.week_end); else FIN_SEMANA.delete(e.bamboo_id);
   const days = new Map();
   for (const d of bb.days ?? []) {
     if (!days.has(d.bamboo_id)) days.set(d.bamboo_id, new Map());
@@ -196,7 +206,7 @@ export function HorasView() {
     <div>
       <h1>${t("Horas")}</h1>
       <p class="muted">${ultimo ? t("Datos de Bamboo, actualizados {h}.", { h: hace(ultimo.finished_at) }) : t("Todavía no hay datos de Bamboo.")}
-        ${" "}${t("La semana vence el lunes siguiente a las 8:00 (hora de Bolivia).")}</p>
+        ${" "}${t("La semana vence el lunes siguiente a las 8:00 (hora de Bolivia); para quien trabaja de domingo a lunes, el día después de su último día.")}</p>
     </div>
     ${isAdmin && html`<${SyncButton} />`}
   </header>`;
@@ -287,7 +297,7 @@ function Periodo({ ix: ixBase, gs, personas, match, soloAlertas, modo, ini, setI
 
   const rs = conDatos.map((id) => res.get(id));
   const nPend = rs.filter((r) => r.pendiente).length, nMas = rs.filter((r) => !r.pendiente && r.de_mas).length;
-  const enPlazo = pasados.some((d) => nowLocal() < limiteDe(d));
+  const enPlazo = pasados.some((d) => ids.some((id) => nowLocal() < limiteDe(d, finSemanaDe(id))));
 
   return html`<div>
     <div class="row between hb-period">
@@ -669,10 +679,10 @@ function Horarios() {
     } catch (x) { toast(x.message, "bad"); }
   };
   return html`<div class="block-s">
-    <p class="muted">${t("Quien no está aquí trabaja de lunes a viernes, 8 h por día. Los días fuera de su horario no se exigen; si registra horas ahí, se marca como horas en día libre.")}</p>
+    <p class="muted">${t("Quien no está aquí trabaja de lunes a viernes, 8 h por día. Los días fuera de su horario no se exigen; si registra horas ahí, se marca como horas en día libre. Si sus días cruzan de domingo a lunes (por ejemplo, de jueves a lunes), su semana termina en su último día y se revisa al día siguiente a las 8:00.")}</p>
     <table class="tbl"><thead><tr><th>${t("Persona")}</th><th>${t("Días que trabaja")}</th><th>${t("Nota")}</th><th></th></tr></thead>
       <tbody>${rows.map((r) => html`<tr key=${r.id}><td>${r.full_name}${!enBamboo.has(norm(r.full_name)) && html` <span class="pill hb-warn" title=${t("No coincide con ningún nombre de Bamboo")}>${t("no está en Bamboo")}</span>`}</td>
-        <td>${rangoTxt(r.days)}</td><td class="small muted">${r.note}</td>
+        <td>${rangoTxt(r.days)}${finSemana(r.days) !== 6 && html`<div class="small muted">${t("Semana de {a} a {b}; se revisa el {a} a las 8:00", { a: DIAS_LARGOS()[(finSemana(r.days) + 1) % 7], b: DIAS_LARGOS()[finSemana(r.days)] })}</div>`}</td><td class="small muted">${r.note}</td>
         <td class="right"><button class="link small" onClick=${() => { setNombre(r.full_name); setDias(r.days); setNota(r.note ?? ""); }}>${t("Editar")}</button>
           <button class="link small late-t" onClick=${async () => { if (confirm(t("¿Quitar el horario de {n}?", { n: r.full_name }))) { await api.remove("rule_schedules", r.id); reloadBamboo(); } }}>${t("Quitar")}</button></td></tr>`)}</tbody></table>
     <form class="hb-form stack-s mt" onSubmit=${guardar}>
@@ -949,6 +959,10 @@ export const __test = { setNow: (ms) => { _now = ms; } };
 // =====================================================================
 //  Cambio 20b: vistas de la persona del equipo (solo sus datos)
 // =====================================================================
+// "Mis horas": la semana de la persona (de lunes a domingo, o de martes a lunes para quien trabaja de jueves a lunes)
+const textoSemana = (fin) => (fin == null || fin === 6 ? t("La semana vence el lunes siguiente a las 8:00 (hora de Bolivia).")
+  : t("Tu semana va de {a} a {b}: registra tus horas hasta el {b}. Se revisa el {c} a las 8:00 (hora de Bolivia).", { a: DIAS_LARGOS()[(fin + 1) % 7], b: DIAS_LARGOS()[fin], c: DIAS_LARGOS()[(fin + 1) % 7] }));
+
 function usarMiBamboo() {
   const { bamboo, me, idx } = useApp();
   const ix = useMemo(() => (bamboo?.available ? indexBamboo(bamboo) : null), [bamboo]);
@@ -986,7 +1000,7 @@ export function MisHoras() {
   const sinDatos = !diasMes.some((d) => dm.has(d));
   return html`<section class="page mis-horas">
     <header class="page-head"><div><h1>${t("Mis horas")}</h1>
-      <p class="muted">${ultimo ? t("Datos de Bamboo, actualizados {h}.", { h: hace(ultimo.finished_at) }) : ""} ${t("La semana vence el lunes siguiente a las 8:00 (hora de Bolivia).")}</p></div></header>
+      <p class="muted">${ultimo ? t("Datos de Bamboo, actualizados {h}.", { h: hace(ultimo.finished_at) }) : ""} ${textoSemana(e.week_end)}</p></div></header>
     <div class="row between hb-period">
       <div class="row">
         <button class="icon" disabled=${!canPrev} onClick=${() => { setMes(mesMas(mes, -1)); setSel(null); }} aria-label=${t("Anterior")}>‹</button>

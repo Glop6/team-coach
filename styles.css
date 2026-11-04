@@ -879,6 +879,8 @@ button.small-btn { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
 .rd-tabla th { text-align: left; font-weight: 600; color: var(--muted); font-size: 0.8rem; padding: 0.4rem 0.5rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
 .rd-tabla td { padding: 0.45rem 0.5rem; border-bottom: 1px solid var(--line); vertical-align: middle; }
 .rd-tabla tr:hover td, .rd-tabla tr:focus-visible td { background: var(--surface-2); cursor: pointer; }
+.rd-tabla.fija tr:hover td { background: none; cursor: default; }
+.rd-tabla tr.sel td, .rd-tabla.fija tr.sel:hover td { background: var(--surface-2); }
 .rd-tabla .num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
 .rd-quien, .rd-tend { display: inline-flex; gap: 0.5rem; align-items: center; white-space: nowrap; }
 .rd-lista, .rd-hechos { list-style: none; margin: 0; padding: 0; font-size: 0.88rem; }
@@ -916,7 +918,7 @@ button.small-btn { padding: 0.2rem 0.7rem; font-size: 0.82rem; }
   .tbl.access td:first-child, .tbl.users td:first-child { flex: 1 1 100%; overflow-wrap: anywhere; }
   .tbl.access td:nth-child(2) { flex: 1 1 100%; overflow-wrap: anywhere; font-size: 0.9rem; }
   .tbl.access td.right, .tbl.users td.right { text-align: left; }
-  .rd-tabla .rd-quien .avatar, .rd-tabla th:last-child, .rd-tabla td:last-child:not([colspan]) { display: none; }
+  .rd-tabla .rd-quien .avatar, .rd-tabla:not(.fija) th:last-child, .rd-tabla:not(.fija) td:last-child:not([colspan]) { display: none; }
   .rd-tabla th, .rd-tabla td { padding-left: 0.3rem; padding-right: 0.3rem; }
   .rd-tabla .rd-quien { white-space: normal; }
 }

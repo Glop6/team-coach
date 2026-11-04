@@ -57,8 +57,20 @@ export const weekday = (s: string) => (toDate(s).getUTCDay() + 6) % 7;        //
 export const fechaMini = (s: string) => `${Number(s.slice(8, 10))} ${MESES[Number(s.slice(5, 7)) - 1].slice(0, 3)}`;
 export const lunesDe = (s: string) => addDays(s, -weekday(s));
 
-/** Momento (hora local "ingenua", en ms) en que vence el día: lunes siguiente a las horaLimite. */
-export const limiteDe = (s: string, horaLimite = 8) => toDate(addDays(lunesDe(s), 7)).getTime() + horaLimite * 3600000;
+/** Último día de la semana de una persona (0 = lunes … 6 = domingo). Si sus días cruzan de domingo a lunes
+ *  (por ejemplo, de jueves a lunes), la semana termina en su último día laborable; si no, el domingo. */
+export function finSemana(laborables: number[]): number {
+  const set = new Set(laborables);
+  if (set.size >= 7 || !set.has(6) || !set.has(0)) return 6;
+  let e = 0;
+  while (set.has(e + 1)) e++;
+  return e;
+}
+/** Último día de la semana de la persona que contiene el día s */
+export const finDeSemana = (s: string, fin = 6) => addDays(s, (fin - weekday(s) + 7) % 7);
+/** Momento (hora local "ingenua", en ms) en que vence el día: el día siguiente al fin de su semana (lunes, para
+ *  la semana de lunes a domingo) a las horaLimite. */
+export const limiteDe = (s: string, horaLimite = 8, fin = 6) => toDate(addDays(finDeSemana(s, fin), 1)).getTime() + horaLimite * 3600000;
 
 export function rangoDiasTxt(dias: number[]): string {
   const set = new Set(dias);
@@ -103,16 +115,20 @@ export type Rules = {
   incidentsFrom?: string | null;          // primera semana (lunes) desde la que se crean incidencias automáticas
 };
 
-/** Incidencias automáticas: la semana anterior, una vez vencida (lunes 8:00), por persona con algo que no cuadra. */
-export function incidenciasSemana(ev: Map<string, { dias: Dia[] }>, rules: Rules, ahora: number) {
+/** Incidencias automáticas: la semana anterior, una vez vencida, por persona con algo que no cuadra.
+ *  La semana de cada persona empieza en el lunes "lunes" o después (de martes a lunes, si trabaja de jueves a
+ *  lunes) y vence el día siguiente a su último día a la hora límite (lunes 8:00, o martes 8:00). */
+export function incidenciasSemana(ev: Map<string, { dias: Dia[]; laborables?: number[] }>, rules: Rules, ahora: number) {
   const hoy = iso(new Date(ahora));
   const lunes = addDays(lunesDe(hoy), -7);
-  if (ahora < limiteDe(lunes, rules.horaLimite)) return null;                  // todavía no venció
+  if (ahora < limiteDe(lunes, rules.horaLimite)) return null;                  // todavía no venció (ni la semana más corta)
   if (rules.incidentsFrom && lunes < rules.incidentsFrom) return null;          // no se generan hacia atrás
-  const fin = addDays(lunes, 6);
-  const filas: { eid: string; detalle: string; dias: number }[] = [];
+  const filas: { eid: string; detalle: string; dias: number; vence: string }[] = [];
   for (const [eid, v] of ev) {
-    const malos = v.dias.filter((x) => x.fecha >= lunes && x.fecha <= fin &&
+    const finSem = finSemana(v.laborables ?? LABORABLES_DEFAULT);
+    const ini = addDays(lunes, (finSem + 1) % 7), fin = addDays(ini, 6);
+    if (ahora < limiteDe(fin, rules.horaLimite, finSem)) continue;              // su semana todavía no venció
+    const malos = v.dias.filter((x) => x.fecha >= ini && x.fecha <= fin &&
       (PROBLEMA.includes(x.estado) || (["extra", "exceso"].includes(x.estado) && !x.nota && !x.ia)));
     if (!malos.length) continue;
     const detalle = malos.map((x) => {
@@ -122,9 +138,9 @@ export function incidenciasSemana(ev: Map<string, { dias: Dia[] }>, rules: Rules
       if (x.estado === "extra") return `${d}: ${fmtH(x.reg)}h en ${x.feriado ? "feriado" : x.pto ? "PTO" : "día libre"} sin comentario`;
       return `${d}: ${fmtH(x.reg)}h (más de ${fmtH(x.esperado)}h) sin comentario`;
     }).join("; ");
-    filas.push({ eid, detalle, dias: malos.length });
+    filas.push({ eid, detalle, dias: malos.length, vence: addDays(fin, 1) });
   }
-  return { lunes, vence: lunesDe(hoy), filas };
+  return { lunes, filas };
 }
 
 /** Feriados de UNA persona: los nacionales de su país + el regional de su ciudad, con los cambios de Reglas. */
@@ -291,7 +307,7 @@ export function evaluarDia(eid: string, pais: string | null, f: string, h: Horas
   }
   esperado = Math.max(esperado, 0);
   const reg = r2(h.horas.get(k) ?? 0);
-  const cerrado = ahora >= limiteDe(f, horaLimite);
+  const cerrado = ahora >= limiteDe(f, horaLimite, finSemana(laborables));
   let estado: string;
   if (reg + TOLERANCIA >= esperado) {
     if (esperado === 0 && reg === 0) estado = "esperado";
@@ -829,10 +845,10 @@ export async function sincronizar(db: any, api: Api, opts: { aiKey?: string; aiM
   const empRows = ids.map((id) => {
     const e = equipo.get(id), v = ev.get(id)!;
     return { bamboo_id: id, full_name: e.displayName, email: e.workEmail ?? null, supervisor_id: e.supervisorEId ? String(e.supervisorEId) : null,
-      country: v.pais, info: v.info, person_id: personaDe.get(id) ?? null, ai_obs: resIA.get(id) ?? null, obs: obs.get(id) ?? [], updated_at: new Date().toISOString() };
+      country: v.pais, info: v.info, week_end: finSemana(v.laborables), person_id: personaDe.get(id) ?? null, ai_obs: resIA.get(id) ?? null, obs: obs.get(id) ?? [], updated_at: new Date().toISOString() };
   });
   if (yoEmp) empRows.push({ bamboo_id: yo, full_name: yoEmp.displayName, email: yoEmp.workEmail ?? null, supervisor_id: null,
-    country: paisDe(yoEmp, rules.feriados), info: "", person_id: personaDe.get(yo) ?? null, ai_obs: null, obs: [], updated_at: new Date().toISOString() });
+    country: paisDe(yoEmp, rules.feriados), info: "", week_end: null, person_id: personaDe.get(yo) ?? null, ai_obs: null, obs: [], updated_at: new Date().toISOString() });
   const enAlcance = empRows.map((r) => r.bamboo_id);
   await porLotes(empRows, 200, (l) => db.from("bamboo_employees").upsert(l));
   const { data: viejosEmp } = await db.from("bamboo_employees").select("bamboo_id");
@@ -889,7 +905,7 @@ export async function sincronizar(db: any, api: Api, opts: { aiKey?: string; aiM
   const inc = incidenciasSemana(ev, rules, ahora);
   if (inc?.filas.length) {
     const rows = inc.filas.map((f) => ({ bamboo_id: f.eid, person_id: personaDe.get(f.eid) ?? null, source: "bamboo",
-      category: "Bamboo (registro de horas)", severity: "leve", occurred_on: inc.vence, week_start: inc.lunes,
+      category: "Bamboo (registro de horas)", severity: "leve", occurred_on: f.vence, week_start: inc.lunes,
       detail: f.detalle, created_by_name: "Bamboo (automático)" }));
     const { error } = await db.from("incidents").upsert(rows, { onConflict: "source,bamboo_id,week_start", ignoreDuplicates: true });
     if (error && !/incidents/.test(error.message)) avisos.push(`No pude registrar incidencias: ${error.message}`);
