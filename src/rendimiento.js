@@ -143,14 +143,15 @@ const tasaError = (s, i) => { const c = qaCerradas(s, i); return c > 0 ? (s.qaEr
 const desgloseQa = (s, i) => t("{b} bugs · {o} oportunidades ({op} · {ob}) · {s} sin falla ({p} · {na})", {
   b: nf(s.qaErr[i]), o: nf(s.qaOpp[i]), op: nf(s.qaOpp[i] - s.qaObs[i]), ob: nf(s.qaObs[i]), s: nf(s.qaSin[i]), p: nf(s.qaSin[i] - s.qaNa[i]), na: nf(s.qaNa[i]) });
 // Cambio 35: Deliverables Used de Copywriters por mes. Promedio diario = suma ÷ días con registros (como "Avg / day"
-// del dashboard). Solo los meses que traen el dato, del más reciente al más antiguo.
+// del dashboard). Cuenta Completed, Approval y Contributor Review (regla en perf.resumen_entregables). Solo los meses
+// que traen el dato, del más reciente al más antiguo.
 function Entregables({ p, meses, sel, yo }) {
   const filas = meses.map((m, i) => ({ m, i, n: p.entregables[i], d: p.diasEntregables[i] })).filter((x) => x.d > 0).reverse();
   if (!filas.length) return null;
   return html`<section class="rd-card"><h2>${t("Deliverables Used")}</h2><p class="rd-sub">${yo ? t("Tu promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.") : t("Promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.")}</p>
     <div class="rd-tabla-wrap"><table class="rd-tabla fija"><thead><tr><th>${t("Mes")}</th><th class="num">${t("Promedio por día")}</th></tr></thead>
     <tbody>${filas.map((x) => html`<tr key=${x.m} class=${x.i === sel ? "sel" : ""}><td>${mesCorto(x.m)} ${x.m.slice(0, 4)}</td><td class="num"><b>${nf(x.n / x.d, 1)}</b> <span class="small muted">${t("{n} ÷ {d} días", { n: nf(x.n), d: nf(x.d) })}</span></td></tr>`)}</tbody></table></div>
-    <p class="small muted">${t("Solo las filas de Copywriting que traen la columna Deliverables Used (desde octubre de 2026).")}</p></section>`;
+    <p class="small muted">${t("Filas de Copywriting con la columna Deliverables Used (desde octubre de 2026), en estado Completed, Approval o Contributor Review, por la fecha en que se hizo el copy.")}</p></section>`;
 }
 
 // Tendencia: promedio de los 3 meses hasta i contra los 3 anteriores (±5 %)

@@ -3,8 +3,11 @@
 --  Va DESPUÉS de 23_perf_qa_reglas.sql.
 --  Por persona y mes: la suma de "Deliverables Used" (extra->deliverablesUsed), los días con registros y las
 --  filas. El promedio diario = suma ÷ días con registros, igual que "Avg / day" del dashboard (Grupos →
---  Copywriters). Solo filas del proyecto Copywriting que traen el dato (las subidas desde octubre de 2026) y
---  con la regla isCounted de motor.js: de CW, solo las "Completed".
+--  Copywriters). Solo filas del proyecto Copywriting que traen el dato (las subidas desde octubre de 2026), en
+--  estado Completed, Approval o Contributor Review (el trabajo del copywriter ya está hecho; Cancelled no
+--  cuenta), por la fecha en que lo hizo (Copy Completed Date = event_date).
+--  Cada deliverable es una sola fila (clave cw::<GUID>): si cambia de estado en una carga posterior, se
+--  actualiza esa fila y no se suma dos veces.
 --  SECURITY INVOKER: cada uno ve solo lo que sus permisos (RLS de perf) le dejan ver.
 --  Re-ejecutable.
 -- =====================================================================
@@ -19,7 +22,7 @@ language sql stable security invoker set search_path = '' as $$
     and r.event_date >= (p_desde::timestamp at time zone 'America/La_Paz')
     and r.project = 'CodeRoad Internal - Copywriting'
     and jsonb_typeof(r.extra->'deliverablesUsed') = 'number'
-    and case when r.extra->>'sourceType' = 'cw' then coalesce(r.extra->>'status', '') = 'Completed' else true end
+    and coalesce(r.extra->>'status', '') in ('Completed', 'Approval', 'Contributor Review')
   group by 1, 2
 $$;
 

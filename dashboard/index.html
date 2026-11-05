@@ -3512,10 +3512,12 @@ function buildGroupBreakdown(filtered, monthsCount){
   });
 
   // Copywriters: "Deliverables Used" per day (only rows that carry the column, i.e. from the October 2026 upload on).
+  // Counts every deliverable whose copy is done (Completed, Approval or Contributor Review; not Cancelled), on its
+  // Copy Completed Date — not only the Completed ones the case counts use. Same rule as perf.resumen_entregables.
   const winFrom = months.length ? months[0].start : null, winTo = months.length ? months[months.length-1].end : null;
   const cwDaily = {};
-  m.list.forEach(r=>{
-    if(r.project!==PROJECT_LABELS.cw || r.deliverablesUsed===null || r.deliverablesUsed===undefined || !r.date || !eligible[r.ownerKey]) return;
+  filtered.forEach(r=>{
+    if(r.project!==PROJECT_LABELS.cw || !CW_DELIVERABLE_STATUSES.has(r.status) || r.deliverablesUsed===null || r.deliverablesUsed===undefined || !r.date || !eligible[r.ownerKey]) return;
     let a = winFrom, b = winTo;
     if(explicitFilterActive){ if(filters.from && (!a || filters.from > a)) a = filters.from; if(filters.to && (!b || filters.to < b)) b = filters.to; }
     if((a && r.date < a) || (b && r.date > b)) return;
@@ -3527,6 +3529,7 @@ function buildGroupBreakdown(filtered, monthsCount){
   return { months, perPerson, groupData, explicitFilterActive, cwDaily };
 }
 
+const CW_DELIVERABLE_STATUSES = new Set(['Completed', 'Approval', 'Contributor Review']);
 function cwStats(daily){
   const days = Object.values(daily);
   const used = days.reduce((s,d)=>s+d.used,0);
@@ -3585,7 +3588,7 @@ function renderGrupos(filtered){
       </div>
       <table><thead><tr><th>Member</th>${g.projectCols.map(pr=>`<th>${esc(pr.replace('CodeRoad Internal - ',''))}</th>`).join('')}<th>${g.projectCols.length?'Total cases':'Cases (period)'}</th>${gk==='copywriters'?'<th>Deliverables used</th><th>Avg / day</th>':''}<th>Latest month %</th></tr></thead>
       <tbody>${memberRows ? memberRows + totalsRow : `<tr><td colspan="${3+g.projectCols.length}" class="empty">No individual case data for this filter.</td></tr>`}</tbody></table>
-      ${gk==='copywriters' ? '<p class="muted" style="font-size:11.5px; margin-top:6px;">Deliverables used and Avg / day only include rows that carry that column (uploads from October 2026 on). Avg / day = deliverables used ÷ days with entries.</p>' + cwMonthly + cwDetail : ''}
+      ${gk==='copywriters' ? '<p class="muted" style="font-size:11.5px; margin-top:6px;">Deliverables used and Avg / day only include rows that carry that column (uploads from October 2026 on), in Completed, Approval or Contributor Review, by Copy Completed Date. Avg / day = deliverables used ÷ days with entries.</p>' + cwMonthly + cwDetail : ''}
     </div>`;
   }).join('');
 

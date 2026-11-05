@@ -269,7 +269,7 @@ export const EN = {
   "Promedio por día": "Average per day",
   "Tu promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.": "Your daily average for each month: each day's total, averaged over the days with entries.",
   "Promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.": "Daily average for each month: each day's total, averaged over the days with entries.",
-  "Solo las filas de Copywriting que traen la columna Deliverables Used (desde octubre de 2026).": "Only Copywriting rows that carry the Deliverables Used column (from October 2026 on).",
+  "Filas de Copywriting con la columna Deliverables Used (desde octubre de 2026), en estado Completed, Approval o Contributor Review, por la fecha en que se hizo el copy.": "Copywriting rows with the Deliverables Used column (from October 2026 on), in Completed, Approval or Contributor Review, by the date the copy was done.",
   "Manuales": "Manual",
   "Bamboo": "Bamboo",
   "Ver anuladas ({n})": "Show voided ({n})",
