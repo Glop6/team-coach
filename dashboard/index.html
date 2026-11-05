@@ -3607,16 +3607,20 @@ function buildGroupBreakdown(filtered, monthsCount){
     const totalHours = hoursByMonth.reduce((a,b)=>a+b,0);
     const totalExpected = expectedByMonth.reduce((a,b)=>a+b,0);
     // Columns per project only for the four operating teams, and only for projects someone in the team actually did.
+    // Cambio 38: the table lists the lead as one more member (first row), except Copywriters, whose coordinator doesn't do that casework.
+    const leadInTable = gk!=='copywriters' && allKeys.includes(g.leader);
+    const memberKeys = allKeys.filter(k=>k!==g.leader);
+    const tableKeys = leadInTable ? [g.leader, ...memberKeys] : memberKeys;
     let projectCols = [];
     if(PROJECT_COLUMN_GROUPS.has(gk)){
       const present = new Set();
-      allKeys.filter(k=>k!==g.leader).forEach(k=>Object.keys(perPerson[k].projTotals).forEach(pr=>present.add(pr)));
+      tableKeys.forEach(k=>Object.keys(perPerson[k].projTotals).forEach(pr=>present.add(pr)));
       projectCols = Array.from(present).sort((a,b)=>{ const ia = PROJECT_COL_ORDER.indexOf(a), ib = PROJECT_COL_ORDER.indexOf(b); return (ia<0?99:ia)-(ib<0?99:ib) || a.localeCompare(b); });
     }
     groupData[gk] = {
       projectCols,
       label: g.label, leader: g.leader, leaderDisplay: eligible[g.leader]||niceName(g.leader),
-      memberKeys: allKeys.filter(k=>k!==g.leader),
+      memberKeys, tableKeys, leadInTable, // memberKeys (without the lead) = the AI note written to the lead
       allKeys, countKeys, casesByMonth, hoursByMonth, pctByMonth,
       totalCases, totalHours, avgPct: totalExpected ? +(totalHours/totalExpected*100).toFixed(0) : 0
     };
@@ -3660,16 +3664,18 @@ function renderGrupos(filtered){
 
   const groupCards = !data ? '<p class="muted" style="font-size:12.5px;">No data for this filter.</p>' : Object.entries(data.groupData).map(([gk, g])=>{
     const latestPct = g.pctByMonth.length ? g.pctByMonth[g.pctByMonth.length-1] : 0;
-    const memberRows = g.memberKeys.map(k=>{
+    const sumHours = k=>data.perPerson[k].hoursByMonth.reduce((a,b)=>a+b,0);
+    const memberRows = g.tableKeys.map(k=>{
       const p = data.perPerson[k];
       const pLatest = p.pctByMonth.length ? p.pctByMonth[p.pctByMonth.length-1] : 0;
       const totalCases = p.casesByMonth.reduce((a,b)=>a+b,0);
+      const isLead = k===g.leader;
       const projCells = g.projectCols.map(pr=>`<td class="num">${p.projTotals[pr] ? p.projTotals[pr] : '<span class="muted">–</span>'}</td>`).join('');
       const cw = (gk==='copywriters' && data.cwDaily[k]) ? cwStats(data.cwDaily[k]) : null;
       const cwCells = gk==='copywriters' ? (cw ? `<td class="num">${cw.used}</td><td class="num">${cw.avg.toFixed(1)}</td>` : '<td class="num muted">–</td><td class="num muted">–</td>') : '';
-      return `<tr><td>${esc(p.display)}</td>${projCells}<td class="num">${totalCases}</td>${cwCells}<td class="num">${pctBadge(pLatest)}</td></tr>`;
+      return `<tr><td>${esc(p.display)}${isLead ? ' <span class="muted" style="font-size:11px;">(lead)</span>' : ''}</td>${projCells}<td class="num">${totalCases}</td><td class="num">${sumHours(k).toFixed(1)}</td>${cwCells}<td class="num">${pctBadge(pLatest)}</td></tr>`;
     }).join('');
-    const totalsRow = g.projectCols.length ? `<tr style="font-weight:600; border-top:2px solid var(--border);"><td>Total</td>${g.projectCols.map(pr=>`<td class="num">${g.memberKeys.reduce((s,k)=>s+(data.perPerson[k].projTotals[pr]||0),0)||'<span class="muted">–</span>'}</td>`).join('')}<td class="num">${g.memberKeys.reduce((s,k)=>s+data.perPerson[k].casesByMonth.reduce((a,b)=>a+b,0),0)}</td><td class="num">${pctBadge(latestPct)}</td></tr>` : '';
+    const totalsRow = g.projectCols.length ? `<tr style="font-weight:600; border-top:2px solid var(--border);"><td>Total</td>${g.projectCols.map(pr=>`<td class="num">${g.tableKeys.reduce((s,k)=>s+(data.perPerson[k].projTotals[pr]||0),0)||'<span class="muted">–</span>'}</td>`).join('')}<td class="num">${g.tableKeys.reduce((s,k)=>s+data.perPerson[k].casesByMonth.reduce((a,b)=>a+b,0),0)}</td><td class="num">${g.tableKeys.reduce((s,k)=>s+sumHours(k),0).toFixed(1)}</td><td class="num">${pctBadge(latestPct)}</td></tr>` : '';
     // Daily average per month: each day's total, averaged over the days with entries (same as Avg / day)
     const cwMonths = gk==='copywriters' ? [...new Set(g.memberKeys.flatMap(k=>Object.keys(data.cwDaily[k]||{}).map(d=>d.slice(0,7))))].sort().reverse() : [];
     const cwMonthly = cwMonths.length ? `<h4 style="margin:14px 0 4px;">Deliverables used — daily average by month</h4>
@@ -3697,8 +3703,8 @@ function renderGrupos(filtered){
           <div class="kpi"><div class="lbl">Latest month capacity</div><div class="val">${pctBadge(latestPct)}</div></div>
         </div>
       </div>
-      <table><thead><tr><th>Member</th>${g.projectCols.map(pr=>`<th>${esc(pr.replace('CodeRoad Internal - ',''))}</th>`).join('')}<th>${g.projectCols.length?'Total cases':'Cases (period)'}</th>${gk==='copywriters'?'<th>Deliverables used</th><th>Avg / day</th>':''}<th>Latest month %</th></tr></thead>
-      <tbody>${memberRows ? memberRows + totalsRow : `<tr><td colspan="${3+g.projectCols.length}" class="empty">No individual case data for this filter.</td></tr>`}</tbody></table>
+      <table><thead><tr><th>Member</th>${g.projectCols.map(pr=>`<th>${esc(pr.replace('CodeRoad Internal - ',''))}</th>`).join('')}<th>${g.projectCols.length?'Total cases':'Cases (period)'}</th><th>Hours</th>${gk==='copywriters'?'<th>Deliverables used</th><th>Avg / day</th>':''}<th>Latest month %</th></tr></thead>
+      <tbody>${memberRows ? memberRows + totalsRow : `<tr><td colspan="${4+g.projectCols.length+(gk==='copywriters'?2:0)}" class="empty">No individual case data for this filter.</td></tr>`}</tbody></table>
       ${gk==='copywriters' ? '<p class="muted" style="font-size:11.5px; margin-top:6px;">Deliverables used and Avg / day only include rows that carry that column (uploads from October 2026 on), in Completed, Approval or Contributor Review, by Copy Completed Date. Avg / day = deliverables used ÷ days with entries.</p>' + cwMonthly + cwDetail : ''}
     </div>`;
   }).join('');
