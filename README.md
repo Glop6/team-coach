@@ -46,8 +46,9 @@ Este repo es público: aquí no van nombres, correos ni datos del equipo. Esos d
    | `21_perf_ai_tope.sql` | 29 · topes de costo de la IA | 2026-10-29 |
    | `22_perf_config_lider.sql` | 32 · un líder recibe solo la configuración de su gente | 2026-11-03 |
    | `23_perf_qa_reglas.sql` | 34 · reglas de QA (bugs, oportunidades y sin falla) | 2026-11-04 |
-   | `24_perf_entregables.sql` | 35 · Deliverables Used de Copywriters por mes | pendiente |
-   | `25_bamboo_fin_semana.sql` (antes de publicar `bamboo-sync`) | 36 · semana de Bamboo por persona | pendiente |
+   | `24_perf_entregables.sql` | 35 · Deliverables Used de Copywriters por mes | 2026-11-05 |
+   | `25_bamboo_fin_semana.sql` (antes de publicar `bamboo-sync`) | 36 · semana de Bamboo por persona | 2026-11-05 |
+   | `26_perf_deshacer_seguro.sql` (antes de publicar el dashboard) | 37 · subidas sin duplicados y "Deshacer" sin borrar el historial | pendiente |
 
 3. **Exponer el esquema `perf`** en la API (Settings → API → Exposed schemas).
 4. **Cargar los datos del dashboard** en `perf`: `supabase/carga/LEEME.md`. Los ajustes con nombres del equipo (`app_settings.team_config`) están en un SQL privado.
