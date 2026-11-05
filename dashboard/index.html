@@ -557,9 +557,9 @@ function reapplySystemRules(){
   Object.values(STORE).forEach(r=>{
     if(r.project==='Unclassified' && !r.originalType && msBlogGuess(r.caseId, r.loe)){
       const m = typeMapLookup('Blog Request');
-      if(m){ r.project = m.project; r.workType = m.workType; n++; }
+      if(m){ r.project = m.project; r.workType = m.workType; r.fixedOnScreen = true; n++; }
     }
-    if(r.system==='Unidentified system'){ const s=systemForType(r.originalType); if(s){ r.system=s; n++; } }
+    if(r.system==='Unidentified system'){ const s=systemForType(r.originalType); if(s){ r.system=s; r.fixedOnScreen = true; n++; } }
   });
   return n;
 }
@@ -1010,6 +1010,43 @@ function extractRecord(type, hmap, row, fileName, sheetName){
 }
 function rawTypeOf(row, hmap){ const idx = hmap['Type']; return idx!==undefined ? row[idx] : null; }
 
+/* ---------- Cambio 37: re-uploads that bring every month again ----------
+   1. Comparison by day. The generic_case key carries the date as an ISO timestamp, and the same Excel date
+      does not always give the same timestamp: the Excel reader shifts it a few seconds depending on the
+      browser (keys saved so far end in 04:00:36Z; Chrome 156 gives 04:00:00Z). So a case already saved is
+      also recognized by [ID, Type, calendar day, person, LOE]: the day shown in the Excel for the new row,
+      and the day in Bolivia time for the saved one. When that points to exactly one saved case, the saved
+      key is reused, so the row updates it instead of adding a copy.
+   2. Same document under another name. Some documents are sent again every month with all months in them
+      and a different file name each time. Their earlier versions count as the same document, so rows that
+      are not in the new version (edited or removed) are offered for replacement like a re-upload of the
+      same file. */
+const CUMULATIVE_DOCS = ['PA Blogs&LPs Progress']; // "file name contains" (case-insensitive)
+function docFamily(fileName){
+  const n = String(fileName||'').toLowerCase();
+  const d = CUMULATIVE_DOCS.find(x=>n.includes(x.toLowerCase()));
+  return d ? 'doc:'+d.toLowerCase() : 'file:'+(fileName||'');
+}
+const pad2 = n=>(n<10?'0':'')+n;
+function localDay(d){ return (d instanceof Date && !isNaN(d)) ? d.getFullYear()+'-'+pad2(d.getMonth()+1)+'-'+pad2(d.getDate()) : null; }
+const BOLIVIA_DAY = new Intl.DateTimeFormat('en-CA', { timeZone:'America/La_Paz', year:'numeric', month:'2-digit', day:'2-digit' });
+function boliviaDay(iso){ if(!iso) return null; const d = new Date(iso); return isNaN(d) ? null : BOLIVIA_DAY.format(d); }
+function genericKeyParts(key){
+  if(typeof key !== 'string' || !key.startsWith('generic_case::')) return null;
+  try{ const a = JSON.parse(key.slice('generic_case::'.length)); return Array.isArray(a) && a.length === 5 ? a : null; }catch(e){ return null; }
+}
+const daySig = (a, day)=>JSON.stringify([a[0], a[1], day, a[3], a[4]]);
+// saved generic_case keys by day signature; null = more than one saved case has it (never merged)
+function buildDaySigIndex(){
+  const idx = new Map();
+  Object.keys(STORE).forEach(k=>{
+    const a = genericKeyParts(k); if(!a) return;
+    const s = daySig(a, boliviaDay(a[2]));
+    idx.set(s, idx.has(s) ? null : k);
+  });
+  return idx;
+}
+
 /* =====================================================================
    QA REVIEW RECORDS — separate domain from case STORE.
    "Name" = the specialist whose case was reviewed (their error record);
@@ -1147,8 +1184,9 @@ async function handleFiles(fileList){
     }
   });
   const supersededQaKeys = new Set(); // dedupKeys already in QA_STORE that a newer row now replaces
+  const incoming = []; // case rows of every file, staged after reading (Cambio 37)
 
-  if(window.ensureDataFrom && typeof LOADED_FROM !== 'undefined' && LOADED_FROM && files.some(f=>FILES_LOG.some(x=>x.name===f.name))){
+  if(window.ensureDataFrom && typeof LOADED_FROM !== 'undefined' && LOADED_FROM && files.some(f=>FILES_LOG.some(x=>docFamily(x.name)===docFamily(f.name)))){
     showImportProgress('Loading the full history to compare with the previous version of this file…');
     try{ await window.ensureDataFrom(null); }catch(e){ console.error('Could not load full history', e); }
   }
@@ -1184,7 +1222,15 @@ async function handleFiles(fileList){
             let qaStatusFlag = 'new';
             if(qaRec.caseId){
               const cur = qaCaseIndex[qaRec.caseId];
-              if(cur && cur.rec.dateCompleted && qaRec.dateCompleted && cur.rec.dateCompleted > qaRec.dateCompleted){
+              // Cambio 37: the same Excel date read by another browser can differ by a few seconds. Same review
+              // (same person, status and comments) within a minute = the saved one: reuse its key and date, so
+              // it is neither skipped as "older" nor saved again (its AI category is tied to that key).
+              if(cur && cur.dedupKey !== qaRec.dedupKey && cur.rec.dateCompleted && qaRec.dateCompleted &&
+                 Math.abs(cur.rec.dateCompleted - qaRec.dateCompleted) < 60000){
+                const kp = k=>{ try{ const a = JSON.parse(k.slice(4)); a[2] = null; return JSON.stringify(a); }catch(e){ return k; } };
+                if(kp(cur.dedupKey) === kp(qaRec.dedupKey)){ qaRec.dedupKey = cur.dedupKey; qaRec.dateCompleted = cur.rec.dateCompleted; }
+              }
+              if(cur && cur.rec.dateCompleted && qaRec.dateCompleted && cur.rec.dateCompleted - qaRec.dateCompleted >= 60000){
                 // A newer snapshot of this same case is already tracked — this row is stale, skip it.
                 qaSkippedOlder++; count++;
                 continue;
@@ -1203,6 +1249,15 @@ async function handleFiles(fileList){
               qaStatusFlag = existingQa ? 'unchanged' : 'new';
             }
 
+            // Cambio 37: a review already saved exactly as it is keeps its original upload (it is not written
+            // again, so undoing this upload leaves it alone); if any saved field differs it is an update.
+            const storedQa = QA_STORE[qaRec.dedupKey];
+            if(storedQa && storedQa.secondaryDate && qaRec.secondaryDate && Math.abs(storedQa.secondaryDate - qaRec.secondaryDate) < 60000) qaRec.secondaryDate = storedQa.secondaryDate;
+            if(storedQa && qaStatusFlag === 'unchanged'){
+              if(sameStoredQa(storedQa, qaRec)) qaRec.importBatchId = storedQa.importBatchId;
+              else qaStatusFlag = 'updated';
+            }
+
             count++;
             qaStaged.set(qaRec.dedupKey, {rec: qaRec, statusFlag: qaStatusFlag});
             continue;
@@ -1210,22 +1265,7 @@ async function handleFiles(fileList){
           const rec = extractRecord(type, hmap, row, file.name, sn);
           if(!rec){ excluded++; continue; }
           count++;
-
-          const existing = STORE[rec.dedupKey] || (staged.get(rec.dedupKey) || {}).rec;
-          let statusFlag = 'new';
-          let finalRec = rec;
-          if(existing){
-            finalRec = mergeRecords(existing, rec);
-            const sameDate = (+existing.date || null) === (+finalRec.date || null);
-            const same = existing.loe===finalRec.loe && existing.status===finalRec.status &&
-                         (existing.title||'')===(finalRec.title||'') && sameDate;
-            statusFlag = STORE[rec.dedupKey] ? (same ? 'unchanged' : 'updated') : 'new';
-          }
-          finalRec.importBatchId = currentImportBatchId;
-          staged.set(rec.dedupKey, {rec: finalRec, statusFlag});
-
-          if(finalRec.loe===null) qualityIssues.push({type:'Empty LOE', rec:finalRec});
-          if(finalRec.date===null) qualityIssues.push({type:'Invalid or missing date', rec:finalRec});
+          incoming.push(rec); // staged below, once every file is read (Cambio 37)
         }
         fileSummaries.push({name:file.name, sheet:sn, type, count, excluded});
       }
@@ -1236,6 +1276,45 @@ async function handleFiles(fileList){
       fileSummaries.push({name:file.name, sheet:'?', type:'unrecognized', count:0, excluded:0});
     }
   }
+
+  // Cambio 37 · staging. Rows whose key is already saved claim it first; then generic_case rows whose key
+  // is not saved look for the saved case of the same day (see buildDaySigIndex). A saved case is matched
+  // to one incoming row at most; a second one with the same signature stays a separate (new) row.
+  const daySigIndex = incoming.some(r=>r.sourceType==='generic_case') ? buildDaySigIndex() : new Map();
+  const claimed = new Set(incoming.filter(r=>STORE[r.dedupKey]).map(r=>r.dedupKey));
+  let matchedByDay = 0;
+  const sheetRange = {}; // family||sheet -> {min, max} of the dates in the new version
+  incoming.forEach(rec=>{
+    if(rec.sourceType === 'generic_case' && !STORE[rec.dedupKey]){
+      const a = genericKeyParts(rec.dedupKey);
+      const k = a ? daySigIndex.get(daySig(a, localDay(rec.date))) : null;
+      if(k && !claimed.has(k)){
+        claimed.add(k); matchedByDay++;
+        rec.dedupKey = k;
+        rec.date = STORE[k].date; // keep the saved timestamp: same day, only the seconds differ
+      }
+    }
+    const fk = docFamily(rec.sourceFile)+'||'+rec.sourceSheet;
+    if(rec.date){ const t = +rec.date, g = sheetRange[fk] || (sheetRange[fk] = {min:t, max:t}); if(t < g.min) g.min = t; if(t > g.max) g.max = t; }
+
+    const stored = STORE[rec.dedupKey];
+    const existing = stored || (staged.get(rec.dedupKey) || {}).rec;
+    let statusFlag = 'new';
+    let finalRec = rec;
+    if(existing){
+      finalRec = mergeRecords(existing, rec);
+      // the same Excel time read by another browser can differ by a few seconds: keep the saved one
+      if(stored && stored.date && finalRec.date && Math.abs(+stored.date - +finalRec.date) < 60000) finalRec.date = stored.date;
+      statusFlag = stored ? (sameStoredRec(stored, finalRec) ? 'unchanged' : 'updated') : 'new';
+    }
+    // unchanged: nothing is written, and the row keeps the upload it came from
+    if(statusFlag === 'unchanged') finalRec = {...stored};
+    else finalRec.importBatchId = currentImportBatchId;
+    staged.set(rec.dedupKey, {rec: finalRec, statusFlag});
+
+    if(finalRec.loe===null) qualityIssues.push({type:'Empty LOE', rec:finalRec});
+    if(finalRec.date===null) qualityIssues.push({type:'Invalid or missing date', rec:finalRec});
+  });
 
   // Group unclassified/unidentified rows by their raw Type so the preview can
   // offer one fix per Type (not one per row) and remember it for next time.
@@ -1253,27 +1332,47 @@ async function handleFiles(fileList){
   // Re-uploading a corrected version of a file we already have: rows of that same file/sheet that are
   // not in the new version any more (they were edited — e.g. a Type was filled in — or removed) are
   // replaced instead of piling up as duplicates.
-  const readSheets = new Set(fileSummaries.filter(f=>f.type!=='qa' && f.type!=='unrecognized' && !String(f.type).startsWith('error')).map(f=>f.name+'||'+f.sheet));
+  // Cambio 37: "same file" also covers earlier versions of a cumulative document saved under another name
+  // (docFamily). For those, only rows inside the dates the new version covers are replaced, so an older
+  // version that reached further back never loses those months.
+  const readSheets = new Set(fileSummaries.filter(f=>f.type!=='qa' && f.type!=='unrecognized' && !String(f.type).startsWith('error')).map(f=>docFamily(f.name)+'||'+f.sheet));
+  const dayStart = t=>{ const d = new Date(t); return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime(); };
   const supersededKeys = [], supersededSample = [], supersededByFile = {};
   Object.values(STORE).forEach(r=>{
     if(staged.has(r.dedupKey)) return;
-    if(!readSheets.has(r.sourceFile+'||'+r.sourceSheet)) return;
+    const fk = docFamily(r.sourceFile)+'||'+r.sourceSheet;
+    if(!readSheets.has(fk)) return;
+    if(fk.startsWith('doc:') && r.date){
+      const g = sheetRange[fk];
+      // one day of margin on each side: saved dates are Bolivia time, the new ones the browser's
+      if(!g || +r.date < dayStart(g.min) - 86400000 || +r.date >= dayStart(g.max) + 2*86400000) return;
+    }
     supersededKeys.push(r.dedupKey);
-    const fk = r.sourceFile + (r.sourceSheet ? ' / ' + r.sourceSheet : '');
-    supersededByFile[fk] = (supersededByFile[fk]||0) + 1;
+    const fileLabel = r.sourceFile + (r.sourceSheet ? ' / ' + r.sourceSheet : '');
+    supersededByFile[fileLabel] = (supersededByFile[fileLabel]||0) + 1;
     if(supersededSample.length < 6) supersededSample.push({ id:r.caseId, type:r.originalType||r.workType, date:r.date, owner:r.ownerDisplay, project:r.project });
   });
   hideImportProgress();
-  pendingImport = { supersededKeys, supersededSample, supersededByFile, staged: Array.from(staged.values()), qaStaged: Array.from(qaStaged.values()), fileSummaries, qualityIssues, unclassifiedGroups: Array.from(unclassifiedGroups.values()), qaSkippedOlder, supersededQaKeys: Array.from(supersededQaKeys) };
+  pendingImport = { matchedByDay, supersededKeys, supersededSample, supersededByFile, staged: Array.from(staged.values()), qaStaged: Array.from(qaStaged.values()), fileSummaries, qualityIssues, unclassifiedGroups: Array.from(unclassifiedGroups.values()), qaSkippedOlder, supersededQaKeys: Array.from(supersededQaKeys) };
   renderImportPreview();
 }
 
 async function undoBatch(batchId, label){
-  if(!confirm(`Remove all records from "${label}"? This can't be undone (though the file itself is safe on your computer — you can re-upload it).`)) return;
+  if(!confirm(`Undo the upload "${label}"? The rows it added are removed, and rows it changed or replaced go back to how they were before it. Rows that were already saved and did not change are kept.`)) return;
   if(ME){
     if(!ME.canUpload){ alert('Only administrators can remove imports.'); return; }
-    const { error } = await sb.rpc('undo_import_batch', { batch: batchId });
+    const { data, error } = await sb.rpc('undo_import_batch', { batch: batchId });
     if(error){ alert('Could not remove this import from the database: ' + error.message); return; }
+    // Cambio 37: rows put back come from the database, so the page reloads its data instead of patching it
+    if(data && data.restaurados > 0){
+      FILES_LOG = FILES_LOG.filter(f=>f.batchId !== batchId);
+      await writeSyncMeta({});
+      await syncData();
+      Object.keys(QA_CATEGORIES).forEach(k=>{ if(!QA_STORE[k]) delete QA_CATEGORIES[k]; });
+      showSaveNotice(`Upload undone: ${Number(data.borrados).toLocaleString('en-US')} row(s) removed, ${Number(data.restaurados).toLocaleString('en-US')} put back as they were.`, false);
+      renderApp();
+      return;
+    }
   }
   Object.keys(STORE).forEach(k=>{ if(STORE[k].importBatchId === batchId) delete STORE[k]; });
   Object.keys(QA_STORE).forEach(k=>{ if(QA_STORE[k].importBatchId === batchId) delete QA_STORE[k]; });
@@ -1354,10 +1453,16 @@ async function commitImport(){
   }
 
   if(Object.keys(projectFixes).length || Object.keys(systemFixes).length){
-    pendingImport.staged.forEach(({rec})=>{
+    pendingImport.staged.forEach(s=>{
+      const rec = s.rec;
       const key = rec.originalType || '(no Type value)';
+      const before = rec.project+'|'+rec.workType+'|'+rec.system;
       if(projectFixes[key]){ rec.project = projectFixes[key].project; rec.workType = projectFixes[key].workType; }
       if(systemFixes[key]){ rec.system = systemFixes[key]; }
+      // Cambio 37: a fix on a row that was unchanged turns it into an update of this upload
+      if(s.statusFlag === 'unchanged' && before !== rec.project+'|'+rec.workType+'|'+rec.system){
+        s.statusFlag = 'updated'; rec.importBatchId = currentImportBatchId;
+      }
     });
     // Remember project fixes for next time — same shape as TYPE_MAP entries.
     Object.entries(projectFixes).forEach(([rawtype, fix])=>{
@@ -1396,7 +1501,9 @@ function recToArr(r){
           r.date ? r.date.toISOString() : null, r.project, r.workType, r.account,
           r.status, r.loe, r.sourceFile, r.sourceSheet,
           r.loadedAt ? r.loadedAt.toISOString() : null, r.isQueue?1:0, r.sourceType, r.guid,
-          r.description || null, r.url || null, r.originalType || null, r.importBatchId || null, r.system || null];
+          r.description || null, r.url || null, r.originalType || null, r.importBatchId || null, r.system || null,
+          // Cambio 37: these were lost in the local copy, so a reloaded page saw manual LOEs and Deliverables Used as changed
+          r.loeManual ? 1 : 0, r.loeOk ? 1 : 0, r.deliverablesUsed ?? null];
 }
 function arrToRec(a){
   return canonOwner({
@@ -1404,7 +1511,8 @@ function arrToRec(a){
     date: a[6]? new Date(a[6]) : null, project:a[7], workType:a[8], account:a[9],
     status:a[10], loe: a[11]===null? null : Number(a[11]), sourceFile:a[12], sourceSheet:a[13],
     loadedAt: a[14]? new Date(a[14]) : null, isQueue: !!a[15], sourceType:a[16], guid:a[17],
-    description:a[18], url:a[19], originalType:a[20], importBatchId:a[21]||null, system:a[22]||undefined
+    description:a[18], url:a[19], originalType:a[20], importBatchId:a[21]||null, system:a[22]||undefined,
+    loeManual: !!a[23], loeOk: !!a[24], deliverablesUsed: a[25] ?? null
   });
 }
 function slug(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); }
@@ -5171,6 +5279,7 @@ function renderImportPreview(){
         <div class="box"><div class="n">${qualityIssues.length.toLocaleString('en-US')}</div><div class="l">Quality warnings</div></div>
         ${nQa ? `<div class="box"><div class="n">${nQa.toLocaleString('en-US')}</div><div class="l">QA reviews (own tab)</div></div>` : ''}
       </div>
+      ${pendingImport.matchedByDay ? `<p class="muted" style="font-size:12px; margin:-8px 0 14px;">${pendingImport.matchedByDay.toLocaleString('en-US')} row(s) were recognized as cases already saved (same ID, type, day, person and LOE), so they are not added again.</p>` : ''}
 
       ${(nQaUpdated || nQaSuperseded || qaSkippedOlder) ? `
       <div style="background:var(--info-bg, #eef3fb); border:1px solid var(--border,#ccd6e8); border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:12px;">
@@ -5184,7 +5293,7 @@ function renderImportPreview(){
       <div style="background:#fff7e6; border:1px solid #e8c877; border-radius:8px; padding:12px 14px; margin-bottom:16px; font-size:12.5px;">
         <label style="display:flex; gap:8px; align-items:flex-start; cursor:pointer;">
           <input type="checkbox" id="replaceOld" checked style="margin-top:3px;">
-          <span><strong>Replace the previous version of this file</strong> — ${pendingImport.supersededKeys.length.toLocaleString('en-US')} row(s) already saved from the same file/sheet are not in this new version (they were edited or deleted). Keeping this checked replaces them, so nothing is duplicated.
+          <span><strong>Replace the previous version of this file</strong> — ${pendingImport.supersededKeys.length.toLocaleString('en-US')} row(s) already saved from an earlier version of this file/sheet (also under another file name, for documents that bring every month again) are not in this new version (they were edited or deleted). Undo puts them back. Keeping this checked replaces them, so nothing is duplicated.
           <span class="muted" style="display:block; margin-top:4px;">${Object.entries(pendingImport.supersededByFile).map(([f,n])=>esc(f)+': '+n.toLocaleString('en-US')).join(' · ')}</span>
           <span class="muted" style="display:block; margin-top:4px;">Examples being replaced: ${pendingImport.supersededSample.map(x=>`${esc(String(x.id))} (${esc(String(x.type||'no type'))}${x.date?', '+x.date.toISOString().slice(0,10):''})`).join(' · ')}</span>
           ${(staged.length < pendingImport.supersededKeys.length) ? '<span style="display:block; margin-top:4px; color:var(--danger);">⚠ The new file has fewer rows than what is being replaced — make sure this is the complete file, not a partial one.</span>' : ''}
@@ -5630,6 +5739,22 @@ function recToRow(r, personId){
              loadedAt: iso(r.loadedAt), caseIdIsNumber: typeof r.caseId === 'number' }
   };
 }
+// Cambio 37: a row is "unchanged" when what would be written is what is saved. Which upload, file name and
+// sheet it came from, and when it was read, don't count: re-sending the same data changes nothing.
+function savedShape(row){
+  const r = { ...row, extra: { ...(row.extra || {}) } };
+  delete r.import_batch_id; delete r.source_file;
+  delete r.extra.loadedAt; delete r.extra.sourceSheet; delete r.extra.sourceFile;
+  return JSON.stringify(r);
+}
+function sameStoredRec(stored, rec){
+  // fixed only on screen by a rule (reapplySystemRules): the database still has the old value, so write it
+  if(stored.fixedOnScreen) return false;
+  // a manual LOE (Data quality) replaces the file's LOE when shown, and re-uploading never changes it
+  const r = stored.loeManual ? { ...rec, loe: stored.loe } : rec;
+  return savedShape(recToRow(stored, personIdFor(stored))) === savedShape(recToRow(r, personIdFor(r)));
+}
+function sameStoredQa(stored, rec){ return savedShape(qaRecToRow(stored, personIdFor(stored))) === savedShape(qaRecToRow(rec, personIdFor(rec))); }
 function rowToRec(w){
   const x = w.extra || {};
   return canonOwner({
@@ -5739,7 +5864,7 @@ async function writeSyncMeta(m){ try{ await window.storage.set('meta:sync', JSON
 // for "vs previous month" comparisons) reaches back further — e.g. in Jan–Mar — it reaches back that far.
 function dataWindowStart(){ const n = new Date(); const jan1 = new Date(n.getFullYear(), 0, 1), back = new Date(n.getFullYear(), n.getMonth() - 6, 1); return back < jan1 ? back : jan1; }
 const DEFAULT_VIEW_MONTHS = 6;   // what the filters show by default
-const SYNC_VERSION = 3;
+const SYNC_VERSION = 4;          // 4 (Cambio 37): local copy keeps manual LOE and Deliverables Used
 let LOADED_FROM = null;          // Date: data older than this is NOT in memory yet. null = everything is loaded
 const DATE_COL = { records: 'event_date', qa_records: 'date_completed' };
 function monthStartBack(n){ const d = new Date(); return new Date(d.getFullYear(), d.getMonth() - n, 1); }
@@ -5875,8 +6000,21 @@ async function pushImportToSupabase(pi){
   if(!sb || !ME || !ME.canUpload) return true;
   try{
     showImportProgress('Saving to the shared database…');
-    const recRows = pi.staged.map(({ rec }) => recToRow(rec, personIdFor(rec)));
-    const qaRows = (pi.qaStaged || []).map(({ rec }) => qaRecToRow(rec, personIdFor(rec)));
+    // Cambio 37: unchanged rows are not written again (they keep their own upload), and before anything
+    // saved is modified or replaced its current version is kept, so "Undo" can put it back.
+    const changed = pi.staged.filter(s => s.statusFlag !== 'unchanged');
+    const qaChanged = (pi.qaStaged || []).filter(s => s.statusFlag !== 'unchanged');
+    const recRows = changed.map(({ rec }) => recToRow(rec, personIdFor(rec)));
+    const qaRows = qaChanged.map(({ rec }) => qaRecToRow(rec, personIdFor(rec)));
+    const keepRec = changed.filter(s => s.statusFlag === 'updated').map(s => s.rec.dedupKey).concat(pi.supersededKeys || []);
+    const keepQa = qaChanged.filter(s => QA_STORE[s.rec.dedupKey]).map(s => s.rec.dedupKey).concat(pi.supersededQaKeys || []);
+    for(const [tabla, keys] of [['records', keepRec], ['qa_records', keepQa]]){
+      for(let i = 0; i < keys.length; i += 500){
+        showImportProgress(`Keeping the previous version for Undo… ${Math.min(i + 500, keys.length).toLocaleString('en-US')} of ${keys.length.toLocaleString('en-US')}`);
+        const { error } = await sb.rpc('guardar_version_previa', { p_batch: currentImportBatchId, p_tabla: tabla, p_keys: keys.slice(i, i + 500) });
+        if(error) throw error;
+      }
+    }
     const sup = pi.supersededQaKeys || [];
     for(let i = 0; i < sup.length; i += 200){
       const { error } = await sb.rpc('delete_qa_by_keys', { keys: sup.slice(i, i + 200) });
