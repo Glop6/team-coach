@@ -818,6 +818,7 @@ function fmtDate(d){ if(!d) return '—'; try{ return d.toLocaleDateString('en-U
 function fmtHours(min){ if(min===null||min===undefined||isNaN(min)) return '—'; return (min/60).toFixed(1)+' h'; }
 function pct(n){ return (isFinite(n)? n:0).toFixed(1)+'%'; }
 
+function cleanDateText(s){ return String(s).trim().replace(/[\s.]+$/, ''); }
 function parseUSDateTime(s){
   if(!s) return null;
   if(s instanceof Date) return s;
@@ -828,7 +829,8 @@ function parseUSDateTime(s){
   //  - Smartsheet:  "9/1/26 18:21"           (no comma, 2-digit year, 24-hour, no AM/PM)
   // The comma and seconds are optional, the year can be 2 or 4 digits, and AM/PM
   // is optional — when it's missing the hour is already in 24-hour form.
-  const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  // Cambio 37: some exports end the text with stray periods ("10/1/2026, 9:38 AM ." or "… PM.  ."); drop them
+  const m = cleanDateText(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})[,\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?\s*(AM|PM)?$/i);
   if(!m) return null;
   let mo=+m[1], da=+m[2], yr=m[3].length===2 ? 2000+(+m[3]) : +m[3], hh=+m[4], mi=+m[5], ss=m[6]?+m[6]:0, ap=m[7];
   if(mo<1||mo>12||da<1||da>31||hh>23||mi>59) return null;
@@ -839,7 +841,7 @@ function parseUSDateTime(s){
   return new Date(yr, mo-1, da, hh, mi, ss);
 }
 function parseUSDateOnly(s){
-  const m = String(s).trim().match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
+  const m = cleanDateText(s).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})$/);
   if(!m) return null;
   const mo=+m[1], da=+m[2], yr=m[3].length===2 ? 2000+(+m[3]) : +m[3];
   if(mo<1||mo>12||da<1||da>31) return null;
@@ -1502,8 +1504,9 @@ function recToArr(r){
           r.status, r.loe, r.sourceFile, r.sourceSheet,
           r.loadedAt ? r.loadedAt.toISOString() : null, r.isQueue?1:0, r.sourceType, r.guid,
           r.description || null, r.url || null, r.originalType || null, r.importBatchId || null, r.system || null,
-          // Cambio 37: these were lost in the local copy, so a reloaded page saw manual LOEs and Deliverables Used as changed
-          r.loeManual ? 1 : 0, r.loeOk ? 1 : 0, r.deliverablesUsed ?? null];
+          // Cambio 37: these were lost in the local copy, so a reloaded page saw manual LOEs and Deliverables Used as changed,
+          // and a row fixed only on screen (fixedOnScreen) as already saved that way
+          r.loeManual ? 1 : 0, r.loeOk ? 1 : 0, r.deliverablesUsed ?? null, r.fixedOnScreen ? 1 : 0];
 }
 function arrToRec(a){
   return canonOwner({
@@ -1512,7 +1515,7 @@ function arrToRec(a){
     status:a[10], loe: a[11]===null? null : Number(a[11]), sourceFile:a[12], sourceSheet:a[13],
     loadedAt: a[14]? new Date(a[14]) : null, isQueue: !!a[15], sourceType:a[16], guid:a[17],
     description:a[18], url:a[19], originalType:a[20], importBatchId:a[21]||null, system:a[22]||undefined,
-    loeManual: !!a[23], loeOk: !!a[24], deliverablesUsed: a[25] ?? null
+    loeManual: !!a[23], loeOk: !!a[24], deliverablesUsed: a[25] ?? null, fixedOnScreen: !!a[26] || undefined
   });
 }
 function slug(s){ return s.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/(^-|-$)/g,''); }
@@ -5279,6 +5282,15 @@ function renderImportPreview(){
         <div class="box"><div class="n">${qualityIssues.length.toLocaleString('en-US')}</div><div class="l">Quality warnings</div></div>
         ${nQa ? `<div class="box"><div class="n">${nQa.toLocaleString('en-US')}</div><div class="l">QA reviews (own tab)</div></div>` : ''}
       </div>
+      ${(()=>{ // Cambio 37: rows without a date count in no month, so say it before saving
+        const by = {}; let n = 0;
+        staged.forEach(({rec})=>{ if(rec.date) return; n++; const k = rec.sourceFile + (rec.sourceSheet ? ' / ' + rec.sourceSheet : ''); by[k] = (by[k]||0) + 1; });
+        (qaStaged||[]).forEach(({rec})=>{ if(rec.dateCompleted) return; n++; const k = rec.sourceFile + (rec.sourceSheet ? ' / ' + rec.sourceSheet : '') + ' (QA)'; by[k] = (by[k]||0) + 1; });
+        if(!n) return '';
+        return `<div id="noDateWarning" style="background:#fdecea; border:1px solid #e3a39b; border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:12.5px;">
+          <strong>⚠ ${n.toLocaleString('en-US')} row(s) have no date</strong> — they will be saved but will not count in any month. Check the date column of the file before confirming.
+          <div class="muted" style="margin-top:4px;">${Object.entries(by).sort((x,y)=>y[1]-x[1]).map(([f,c])=>esc(f)+': '+c.toLocaleString('en-US')).join(' · ')}</div></div>`;
+      })()}
       ${pendingImport.matchedByDay ? `<p class="muted" style="font-size:12px; margin:-8px 0 14px;">${pendingImport.matchedByDay.toLocaleString('en-US')} row(s) were recognized as cases already saved (same ID, type, day, person and LOE), so they are not added again.</p>` : ''}
 
       ${(nQaUpdated || nQaSuperseded || qaSkippedOlder) ? `
