@@ -123,9 +123,11 @@ export function createApi() {
         ]);
         // Cambio 33: grupos del dashboard para repartir en Primary / SEO / Copywriters (solo lo usa el admin;
         // a un líder sin permiso de subida la base no le entrega la fila)
+        // Cambio 35: Deliverables Used de Copywriters por persona y mes (sin el SQL 24, una lista vacía)
+        const entregables = await todo(() => pf.rpc("resumen_entregables", { p_desde: desde }).order("person_id").order("mes")).catch(() => []);
         const equipos = await pf.from("app_settings").select("value").eq("key", "team_config").maybeSingle()
           .then(({ data }) => data?.value ?? null, () => null);
-        return { available: true, people, casos, qa, horario, equipos };
+        return { available: true, people, casos, qa, horario, entregables, equipos };
       } catch (e) {
         return { available: false, error: e.message };
       }

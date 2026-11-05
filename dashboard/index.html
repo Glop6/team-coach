@@ -3486,9 +3486,11 @@ function buildGroupBreakdown(filtered, monthsCount){
   Object.entries(TEAM_GROUPS).forEach(([gk, g])=>{
     const allKeys = [g.leader, ...g.members].filter(k=>eligible[k]);
     if(!allKeys.length) return;
-    const casesByMonth = months.map((mo,i)=> allKeys.reduce((s,k)=> s + (perPerson[k]?perPerson[k].casesByMonth[i]:0), 0));
-    const hoursByMonth = months.map((mo,i)=> allKeys.reduce((s,k)=> s + (perPerson[k]?perPerson[k].hoursByMonth[i]:0), 0));
-    const expectedByMonth = months.map(mo=> allKeys.reduce((s,k)=> s + expectedForWindow(k, mo.start, mo.end), 0));
+    // The Copywriters coordinator leads the group but doesn't do copywriting casework: out of its totals (COPYWRITERS_EXCLUDE)
+    const countKeys = gk==='copywriters' ? allKeys.filter(k=>!COPYWRITERS_EXCLUDE.has(k)) : allKeys;
+    const casesByMonth = months.map((mo,i)=> countKeys.reduce((s,k)=> s + (perPerson[k]?perPerson[k].casesByMonth[i]:0), 0));
+    const hoursByMonth = months.map((mo,i)=> countKeys.reduce((s,k)=> s + (perPerson[k]?perPerson[k].hoursByMonth[i]:0), 0));
+    const expectedByMonth = months.map(mo=> countKeys.reduce((s,k)=> s + expectedForWindow(k, mo.start, mo.end), 0));
     const pctByMonth = expectedByMonth.map((exp,i)=> exp ? +(hoursByMonth[i]/exp*100).toFixed(0) : 0);
     const totalCases = casesByMonth.reduce((a,b)=>a+b,0);
     const totalHours = hoursByMonth.reduce((a,b)=>a+b,0);
@@ -3504,16 +3506,18 @@ function buildGroupBreakdown(filtered, monthsCount){
       projectCols,
       label: g.label, leader: g.leader, leaderDisplay: eligible[g.leader]||niceName(g.leader),
       memberKeys: allKeys.filter(k=>k!==g.leader),
-      allKeys, casesByMonth, hoursByMonth, pctByMonth,
+      allKeys, countKeys, casesByMonth, hoursByMonth, pctByMonth,
       totalCases, totalHours, avgPct: totalExpected ? +(totalHours/totalExpected*100).toFixed(0) : 0
     };
   });
 
-  // Copywriters: "Deliverables Used" per day (only rows that carry the column, i.e. from September on).
+  // Copywriters: "Deliverables Used" per day (only rows that carry the column, i.e. from the October 2026 upload on).
+  // Counts every deliverable whose copy is done (Completed, Approval or Contributor Review; not Cancelled), on its
+  // Copy Completed Date — not only the Completed ones the case counts use. Same rule as perf.resumen_entregables.
   const winFrom = months.length ? months[0].start : null, winTo = months.length ? months[months.length-1].end : null;
   const cwDaily = {};
-  m.list.forEach(r=>{
-    if(r.project!==PROJECT_LABELS.cw || r.deliverablesUsed===null || r.deliverablesUsed===undefined || !r.date || !eligible[r.ownerKey]) return;
+  filtered.forEach(r=>{
+    if(r.project!==PROJECT_LABELS.cw || !CW_DELIVERABLE_STATUSES.has(r.status) || r.deliverablesUsed===null || r.deliverablesUsed===undefined || !r.date || !eligible[r.ownerKey]) return;
     let a = winFrom, b = winTo;
     if(explicitFilterActive){ if(filters.from && (!a || filters.from > a)) a = filters.from; if(filters.to && (!b || filters.to < b)) b = filters.to; }
     if((a && r.date < a) || (b && r.date > b)) return;
@@ -3525,6 +3529,7 @@ function buildGroupBreakdown(filtered, monthsCount){
   return { months, perPerson, groupData, explicitFilterActive, cwDaily };
 }
 
+const CW_DELIVERABLE_STATUSES = new Set(['Completed', 'Approval', 'Contributor Review']);
 function cwStats(daily){
   const days = Object.values(daily);
   const used = days.reduce((s,d)=>s+d.used,0);
@@ -3554,6 +3559,13 @@ function renderGrupos(filtered){
       return `<tr><td>${esc(p.display)}</td>${projCells}<td class="num">${totalCases}</td>${cwCells}<td class="num">${pctBadge(pLatest)}</td></tr>`;
     }).join('');
     const totalsRow = g.projectCols.length ? `<tr style="font-weight:600; border-top:2px solid var(--border);"><td>Total</td>${g.projectCols.map(pr=>`<td class="num">${g.memberKeys.reduce((s,k)=>s+(data.perPerson[k].projTotals[pr]||0),0)||'<span class="muted">–</span>'}</td>`).join('')}<td class="num">${g.memberKeys.reduce((s,k)=>s+data.perPerson[k].casesByMonth.reduce((a,b)=>a+b,0),0)}</td><td class="num">${pctBadge(latestPct)}</td></tr>` : '';
+    // Daily average per month: each day's total, averaged over the days with entries (same as Avg / day)
+    const cwMonths = gk==='copywriters' ? [...new Set(g.memberKeys.flatMap(k=>Object.keys(data.cwDaily[k]||{}).map(d=>d.slice(0,7))))].sort().reverse() : [];
+    const cwMonthly = cwMonths.length ? `<h4 style="margin:14px 0 4px;">Deliverables used — daily average by month</h4>
+      <div style="overflow-x:auto;"><table><thead><tr><th>Member</th>${cwMonths.map(mk=>`<th class="num">${esc(monthFullLabel(mk))}</th>`).join('')}</tr></thead><tbody>${g.memberKeys.filter(k=>data.cwDaily[k]).map(k=>{
+        const cells = cwMonths.map(mk=>{ const st = cwStats(Object.fromEntries(Object.entries(data.cwDaily[k]).filter(([d])=>d.startsWith(mk))));
+          return st.days ? `<td class="num"><strong>${st.avg.toFixed(1)}</strong> <span class="muted" style="font-size:11px;">${st.used} ÷ ${st.days} d</span></td>` : '<td class="num muted">–</td>'; }).join('');
+        return `<tr><td>${esc(data.perPerson[k].display)}</td>${cells}</tr>`; }).join('')}</tbody></table></div>` : '';
     const cwDetail = gk==='copywriters' ? g.memberKeys.filter(k=>data.cwDaily[k]).map(k=>{
       const days = Object.entries(data.cwDaily[k]).sort((a,b)=>a[0]<b[0]?1:-1);
       return `<details style="margin-top:8px;"><summary style="cursor:pointer; font-size:12.5px;">${esc(data.perPerson[k].display)} — deliverables used per day</summary>
@@ -3565,7 +3577,7 @@ function renderGrupos(filtered){
     <div class="card" style="margin-bottom:16px;">
       <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px; margin-bottom:6px;">
         <h3 style="margin:0;">${esc(g.label)}${groupAiBtn}</h3>
-        <span class="muted" style="font-size:11.5px;">Led by <strong>${esc(g.leaderDisplay)}</strong> — ${g.allKeys.length} people</span>
+        <span class="muted" style="font-size:11.5px;">Led by <strong>${esc(g.leaderDisplay)}</strong> — ${g.countKeys.length} people${g.countKeys.length < g.allKeys.length ? ' (the lead is not counted)' : ''}</span>
       </div>
       <div style="display:flex; gap:20px; flex-wrap:wrap; align-items:center; margin-bottom:10px;">
         <div style="height:90px; width:280px;"><canvas id="groupChart_${safeId(gk)}"></canvas></div>
@@ -3576,7 +3588,7 @@ function renderGrupos(filtered){
       </div>
       <table><thead><tr><th>Member</th>${g.projectCols.map(pr=>`<th>${esc(pr.replace('CodeRoad Internal - ',''))}</th>`).join('')}<th>${g.projectCols.length?'Total cases':'Cases (period)'}</th>${gk==='copywriters'?'<th>Deliverables used</th><th>Avg / day</th>':''}<th>Latest month %</th></tr></thead>
       <tbody>${memberRows ? memberRows + totalsRow : `<tr><td colspan="${3+g.projectCols.length}" class="empty">No individual case data for this filter.</td></tr>`}</tbody></table>
-      ${gk==='copywriters' ? '<p class="muted" style="font-size:11.5px; margin-top:6px;">Deliverables used and Avg / day only include rows that carry that column (from September on). Avg / day = deliverables used ÷ days with entries.</p>' + cwDetail : ''}
+      ${gk==='copywriters' ? '<p class="muted" style="font-size:11.5px; margin-top:6px;">Deliverables used and Avg / day only include rows that carry that column (uploads from October 2026 on), in Completed, Approval or Contributor Review, by Copy Completed Date. Avg / day = deliverables used ÷ days with entries.</p>' + cwMonthly + cwDetail : ''}
     </div>`;
   }).join('');
 

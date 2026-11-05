@@ -382,7 +382,7 @@ export function IncidenciasView() {
 
   return html`<section class="page inc-page">
     <header class="page-head"><div><h1>${t("Incidencias y kudos")}</h1>
-      <p class="muted">${t("Registro para el coaching: lo que hay que mejorar y también lo que se hizo bien. Las incidencias de Bamboo se crean solas cada lunes a las 8:00. Nada se borra: se anula con motivo.")}</p></div>
+      <p class="muted">${t("Registro para el coaching: lo que hay que mejorar y también lo que se hizo bien. Las incidencias de Bamboo se crean solas cada lunes a las 8:00 (el día después de su último día, para quien trabaja de domingo a lunes). Nada se borra: se anula con motivo.")}</p></div>
       <div class="row"><button class="kudos-btn" onClick=${() => setNueva("kudos")}>+ ${t("Kudos")}</button><button class="primary" onClick=${() => setNueva("incidencia")}>+ ${t("Incidencia")}</button></div></header>
     ${nuevasIds.size > 0 && html`<p class="inc-new-note small"><span class="pill new-pill">${t("Nueva")}</span> ${nuevasIds.size === 1 ? t("1 registro nuevo desde tu última visita.") : t("{n} registros nuevos desde tu última visita.", { n: nuevasIds.size })}</p>`}
 

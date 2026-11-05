@@ -58,7 +58,7 @@ function construirModelo(perf, data, bamboo) {
     const tc = p.tc_person_id ? tcPeople.get(p.tc_person_id) ?? null : null;
     personas.set(p.id, { id: p.id, nombre: tc?.full_name ?? p.full_name, clave: claveNombre(p.full_name), active: p.active, tc, group_id: tc?.group_id ?? null,
       cases: cero(), loe: cero(), qaTot: cero(), qaErr: cero(), qaProg: cero(), qaCrit: cero(), qaOpp: cero(), qaObs: cero(), qaSin: cero(), qaNa: cero(), proj: meses.map(() => ({})), hora: Array(24).fill(0), dia: Array(7).fill(0),
-      inc: cero(), kudos: cero(), reuniones: [], bamboo: meses.map(() => null), conCasos: false });
+      inc: cero(), kudos: cero(), reuniones: [], bamboo: meses.map(() => null), conCasos: false, entregables: cero(), diasEntregables: cero() });
   }
   for (const r of perf.casos) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
@@ -72,6 +72,10 @@ function construirModelo(perf, data, bamboo) {
     const p = personas.get(r.person_id), i = iMes.get(r.mes);
     if (!p || i === undefined) continue;
     sumarQa(p, i, r);
+  }
+  for (const r of perf.entregables ?? []) {
+    const p = personas.get(r.person_id), i = iMes.get(r.mes);
+    if (p && i !== undefined) { p.entregables[i] += Number(r.entregables); p.diasEntregables[i] += r.dias; }
   }
   for (const r of perf.horario) { const p = personas.get(r.person_id); if (p) { p.hora[r.hora] += r.casos; p.dia[r.dia - 1] += r.casos; } }
   const porTc = new Map([...personas.values()].filter((p) => p.tc).map((p) => [p.tc.id, p]));
@@ -138,6 +142,18 @@ const tasaError = (s, i) => { const c = qaCerradas(s, i); return c > 0 ? (s.qaEr
 // "178 bugs · 46 oportunidades (46 · 0) · 1.733 sin falla (1.680 · 53)"
 const desgloseQa = (s, i) => t("{b} bugs · {o} oportunidades ({op} · {ob}) · {s} sin falla ({p} · {na})", {
   b: nf(s.qaErr[i]), o: nf(s.qaOpp[i]), op: nf(s.qaOpp[i] - s.qaObs[i]), ob: nf(s.qaObs[i]), s: nf(s.qaSin[i]), p: nf(s.qaSin[i] - s.qaNa[i]), na: nf(s.qaNa[i]) });
+// Cambio 35: Deliverables Used de Copywriters por mes. Promedio diario = suma ÷ días con registros (como "Avg / day"
+// del dashboard). Cuenta Completed, Approval y Contributor Review (regla en perf.resumen_entregables). Solo los meses
+// que traen el dato, del más reciente al más antiguo.
+function Entregables({ p, meses, sel, yo }) {
+  const filas = meses.map((m, i) => ({ m, i, n: p.entregables[i], d: p.diasEntregables[i] })).filter((x) => x.d > 0).reverse();
+  if (!filas.length) return null;
+  return html`<section class="rd-card"><h2>${t("Deliverables Used")}</h2><p class="rd-sub">${yo ? t("Tu promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.") : t("Promedio diario de cada mes: la suma de cada día, promediada sobre los días con registros.")}</p>
+    <div class="rd-tabla-wrap"><table class="rd-tabla fija"><thead><tr><th>${t("Mes")}</th><th class="num">${t("Promedio por día")}</th></tr></thead>
+    <tbody>${filas.map((x) => html`<tr key=${x.m} class=${x.i === sel ? "sel" : ""}><td>${mesCorto(x.m)} ${x.m.slice(0, 4)}</td><td class="num"><b>${nf(x.n / x.d, 1)}</b> <span class="small muted">${t("{n} ÷ {d} días", { n: nf(x.n), d: nf(x.d) })}</span></td></tr>`)}</tbody></table></div>
+    <p class="small muted">${t("Filas de Copywriting con la columna Deliverables Used (desde octubre de 2026), en estado Completed, Approval o Contributor Review, por la fecha en que se hizo el copy.")}</p></section>`;
+}
+
 // Tendencia: promedio de los 3 meses hasta i contra los 3 anteriores (±5 %)
 function tendencia(vals, i) {
   const a = vals.slice(Math.max(0, i - 2), i + 1), b = vals.slice(Math.max(0, i - 5), Math.max(0, i - 2));
@@ -496,6 +512,7 @@ export function RendimientoPersona({ id }) {
           <section class="rd-card"><h2>${yo ? t("En qué trabajé") : t("En qué trabajó")}</h2><p class="rd-sub">${t("Casos por proyecto, {m}", { m: mesLargo(meses[sel]) })}</p>${proj.length ? html`<${BarrasH} filas=${proj} />` : html`<p class="small muted">${t("Sin casos en este mes.")}</p>`}</section>
           <section class="rd-card"><h2>${t("QA")}</h2><p class="rd-sub">${t("Bugs por mes, % de las revisiones cerradas")}</p><${Barras} vals=${meses.map((_, i) => tasaError(p, i))} meses=${meses} sel=${sel} fmt=${(v) => nf(v, 1) + "%"} ancho=${320} etiqueta=${t("Bugs en QA")} />${qaCerradas(p, sel) > 0 && html`<p class="small muted">${desgloseQa(p, sel)}</p>`}</section>
         </div>
+        <${Entregables} p=${p} meses=${meses} sel=${sel} yo=${yo} />
       </div>
       <section class="rd-card"><h2>${t("En Team Coach")}</h2><p class="rd-sub">${t("Lo que pasó alrededor de los números")}</p>
         ${b ? html`<p class="small">${t("{h} h registradas en Bamboo en {m} (esperadas: {e} h); {c} h fueron casos.", { h: nf(b.h), m: mesNombre(meses[sel]), e: nf(b.e), c: nf(hrs(p.loe[sel])) })}</p>`
