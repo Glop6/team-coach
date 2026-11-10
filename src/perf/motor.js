@@ -60,6 +60,8 @@ export function rowToRec(w, alias) {
     isQueue: !!x.isQueue, sourceType: x.sourceType, guid: x.guid ?? null, description: x.description ?? null,
     url: x.url ?? null, originalType: x.originalType ?? null, deliverablesUsed: x.deliverablesUsed ?? null,
     importBatchId: w.import_batch_id || null, system: w.system, personId: w.person_id || null,
+    // Cambio 39: los calcula la base (27_perf_horas.sql)
+    categoria: w.categoria || undefined, ticket: w.ticket ?? null, horasRepetidasDe: w.horas_repetidas_de ?? null, aviso: w.aviso ?? null,
   }, alias);
 }
 
@@ -109,14 +111,18 @@ export function isCounted(r, sel) {
   return true;
 }
 
-// Seguimiento = trabajo extra sobre casos que ya existen (Support / Rework de Site Services, el proyecto
-// Reworks y los Re-checks). No cuenta como caso nuevo salvo que se filtre por él; su LOE sí suma horas.
+// Cambio 39: qué es caso y qué horas suman lo decide la base (supabase/27_perf_horas.sql). Cada fila trae su
+// categoría: 'produccion' (caso completado), 'soporte' (SS Support) o 'rework' (Reworks, SS RW y Re-checks).
+// Soporte y reworks nunca cuentan como casos, con ningún filtro; sus horas suman siempre. Las filas con
+// horasRepetidasDe repiten un rework ya cargado desde WOMS: quien llama las deja fuera (sus horas cuentan una vez).
+export const categoriaDe = (r) => r.categoria || "produccion";
 export function followUpKind(r) {
-  if (r.project === PROJECT_LABELS.site_services && r.workType === "Support") return "ssSupport";
-  if (r.project === PROJECT_LABELS.site_services && r.workType === "Rework") return "ssRework";
+  const c = categoriaDe(r);
+  if (c === "produccion") return null;
+  if (c === "soporte") return "ssSupport";
+  if (r.project === PROJECT_LABELS.site_services) return "ssRework";   // el subtipo es solo la etiqueta del gráfico
   if (r.workType === "Recheck") return "recheck";
-  if (r.project === PROJECT_LABELS.reworks) return "reworks";
-  return null;
+  return "reworks";
 }
 
 export function followUpCounts(list) {
@@ -125,13 +131,13 @@ export function followUpCounts(list) {
   return c;
 }
 
-export function countsAsCase(r, sel) {
-  const k = followUpKind(r);
-  if (!k) return true;
-  const f = conSel(sel);
-  if (k === "reworks" && (f.project.includes(r.project) || f.drillProject === r.project)) return true;
-  if ((k === "ssSupport" || k === "ssRework" || k === "recheck") && f.workType.includes(r.workType)) return true;
-  return false;
+export function countsAsCase(r) { return categoriaDe(r) === "produccion"; }
+
+// Minutos por categoría: Producción, Soporte y Reworks
+export function horasPorCategoria(list) {
+  const h = { produccion: 0, soporte: 0, rework: 0, total: 0 };
+  list.forEach((r) => { if (!tieneLoe(r)) return; h[categoriaDe(r)] += r.loe; h.total += r.loe; });
+  return h;
 }
 
 const tieneLoe = (r) => r.loe !== null && !isNaN(r.loe);
@@ -139,14 +145,12 @@ const tieneLoe = (r) => r.loe !== null && !isNaN(r.loe);
 export function metrics(records, sel) {
   const list = records.filter((r) => isCounted(r, sel));
   const people = new Set(list.filter((r) => !r.isQueue).map((r) => r.ownerKey));
-  const totalCases = list.filter((r) => countsAsCase(r, sel)).length;
+  const totalCases = list.filter(countsAsCase).length;
   const followUps = followUpCounts(list);
-  const loeVals = list.filter(tieneLoe);
-  const totalLOE = loeVals.reduce((s, r) => s + r.loe, 0);
-  const caseLoeCount = loeVals.filter((r) => countsAsCase(r, sel)).length;
+  const horas = horasPorCategoria(list);
   return {
-    totalCases, supportCases: followUps.ssSupport, reworkCases: followUps.ssRework, followUps, totalLOE,
-    avgLOE: caseLoeCount ? totalLOE / caseLoeCount : 0,
+    totalCases, supportCases: followUps.ssSupport, reworkCases: followUps.ssRework, followUps, totalLOE: horas.total, horas,
+    avgLOE: totalCases ? horas.produccion / totalCases : 0,   // horas por caso: solo Producción
     activePeople: people.size,
     avgCasesPerPerson: people.size ? totalCases / people.size : 0,
     list,
@@ -155,7 +159,7 @@ export function metrics(records, sel) {
 
 export function groupCount(list, keyFn, sel) {
   const m = {};
-  list.forEach((r) => { if (!countsAsCase(r, sel)) return; const k = keyFn(r) || "Not available"; m[k] = (m[k] || 0) + 1; });
+  list.forEach((r) => { if (!countsAsCase(r)) return; const k = keyFn(r) || "Not available"; m[k] = (m[k] || 0) + 1; });
   return m;
 }
 // Como groupCount pero cuenta todas las filas (Support / Rework incluidos): para desgloses por tipo de trabajo.
@@ -205,7 +209,7 @@ export function buildTrendData(list, granularity, sel) {
     if (!r.date) return;
     const k = periodKey(r.date, granularity);
     const p = byPeriod[k] || (byPeriod[k] = { cases: 0, loe: 0, loeCount: 0, byProject: {} });
-    const cuenta = countsAsCase(r, sel);
+    const cuenta = countsAsCase(r);
     if (cuenta) { p.cases++; p.byProject[r.project] = (p.byProject[r.project] || 0) + 1; }
     if (tieneLoe(r)) { p.loe += r.loe; if (cuenta) p.loeCount++; }
   });
