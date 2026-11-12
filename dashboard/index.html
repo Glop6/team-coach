@@ -505,6 +505,10 @@ const DEFAULT_TYPE_MAP_RAW = {
   'Postings RW': {project:'reworks', workType:'Design Request'},
   'Via Slack': {project:'via_slack', workType:'Via Slack'},
   'Frontline': {project:'frontline', workType:'Frontline'},
+  // Cambio 40: since Nov 2026 PowerApps cases are logged in the Other Projects Smartsheet instead of the
+  // "MS Internal PA Blogs&LPs Progress" Excel. Same project and work type as that Excel's Landing Page / Blog Request rows.
+  'LPs PA': {project:'lp', workType:'Landing Page'},
+  'Blogs PA': {project:'blog', workType:'Blog'},
 };
 // TYPE_MAP values always store a literal project LABEL (not a PROJECT_LABELS key)
 // so custom entries added from Settings — which may name a brand-new project —
@@ -530,7 +534,8 @@ const DEFAULT_TYPE_SYSTEM = {
   'Frontline':'Salesforce', 'Audit':'Salesforce', 'Core SEO':'Salesforce', 'DDC - Core SEO':'Salesforce',
   'PPR - SEO':'Salesforce', 'SS RW':'Salesforce', 'SS Support':'Salesforce',
   'Grooming':'WOMS', 'LPs RW':'WOMS', 'Postings RW':'WOMS', 'Via Slack':'WOMS',
-  'Studio': NO_PLATFORM
+  'Studio': NO_PLATFORM,
+  'LPs PA':'PowerApps', 'Blogs PA':'PowerApps' // Cambio 40
 };
 // "Ignore at import": rows of a document (name contains X) with a given Type are skipped — e.g. work that is also exported from its own system.
 let IGNORE_RULES = []; // [{ file:'other projects', type:'LPs RW' }]
@@ -732,7 +737,7 @@ function reviewerDisplayName(raw){
 let pendingImport = null; // staged import awaiting confirmation
 let currentImportBatchId = null;
 let currentTab = 'resumen';
-let filters = { project:[], system:[], person:[], workType:[], status:'ALL', from:null, to:null, hourFrom:null, hourTo:null };
+let filters = { project:[], system:[], person:[], workType:[], status:'ALL', sonic:false, from:null, to:null, hourFrom:null, hourTo:null };
 let openPanels = { project:false, system:false, person:false, workType:false };
 // UI-only state for the Capacity tab's "Individual breakdown" mini-charts —
 // not persisted, resets to sensible defaults on reload.
@@ -977,9 +982,12 @@ function extractRecord(type, hmap, row, fileName, sheetName){
       // plural), so it overrides the filename-based guess; every other Type here
       // (SEO/OEM/Posting/etc.) can legitimately come from either PowerApps or the
       // SFX/Salesforce historical export, so filename is the only signal there.
-      system: (rawType === 'Site Service' || rawType === 'Site Services') ? 'Salesforce' : (()=>{ const f=systemFromFilename(fileName); return f!=='Unidentified system' ? f : (systemForType(rawType) || f); })(),
+      system: (rawType === 'Site Service' || rawType === 'Site Services') ? 'Salesforce'
+            : /^(lps|blogs) pa$/i.test(normalizeTypeKey(rawType)) ? 'PowerApps' // Cambio 40: always PowerApps, whatever the file name
+            : (()=>{ const f=systemFromFilename(fileName); return f!=='Unidentified system' ? f : (systemForType(rawType) || f); })(),
       guid: null, status: null, account: null, originalType: rawType,
-      url: get('Blog / CMS URL') || null
+      url: get('Blog / CMS URL') || null,
+      about: sonicDe(get('About')) // Cambio 40
     };
   }
   if(!rec) return null;
@@ -1011,6 +1019,46 @@ function extractRecord(type, hmap, row, fileName, sheetName){
   return canonOwner(rec);
 }
 function rawTypeOf(row, hmap){ const idx = hmap['Type']; return idx!==undefined ? row[idx] : null; }
+
+/* ---------- Cambio 40: PowerApps cases from the Other Projects Smartsheet + Sonic label ----------
+   'LPs PA' / 'Blogs PA' rows are the same kind of case the PA Excel brought (see TYPE_MAP). Two sources of the
+   same cases, so an upload skips a row when the OTHER source already has the same ID, project and person. */
+function esPaSmartsheet(r){ return !!r && r.sourceType === 'generic_case' && /^(lps|blogs) pa$/.test(normalizeTypeKey(r.originalType).toLowerCase()); }
+const PA_PROJECTS = () => [PROJECT_LABELS.lp, PROJECT_LABELS.blog];
+// 'sheet' = Other Projects Smartsheet, 'excel' = PA Excel (or any other PowerApps LP/Blog export), null = not a PowerApps case
+function origenPa(r){
+  if(esPaSmartsheet(r)) return 'sheet';
+  return (r && r.system === 'PowerApps' && PA_PROJECTS().includes(r.project)) ? 'excel' : null;
+}
+function idPaLimpio(id){
+  const v = String(id ?? '').replace(/\s+/g, '').toUpperCase();
+  return (!v || v === 'NA' || v === 'N/A' || v === '-') ? null : v;
+}
+function firmaPa(r){ const id = idPaLimpio(r.caseId); return id ? id + '|' + r.project : null; }
+// firma -> { excel:Set(ownerKey), sheet:Set(ownerKey) }
+function indicePa(recs){
+  const idx = new Map();
+  recs.forEach(r=>agregarIndicePa(idx, r));
+  return idx;
+}
+function agregarIndicePa(idx, r){
+  const o = origenPa(r), f = o && firmaPa(r);
+  if(!f) return;
+  const e = idx.get(f) || { excel:new Set(), sheet:new Set() };
+  e[o].add(r.ownerKey); idx.set(f, e);
+}
+const otroOrigenPa = o => o === 'sheet' ? 'excel' : 'sheet';
+// About column: only "Sonic" is recognized (any case, any spacing); anything else is ignored.
+function sonicDe(v){ return String(v ?? '').replace(/\s+/g, '').toLowerCase() === 'sonic' ? 'Sonic' : null; }
+let INDICE_PA_PANTALLA = null; // rebuilt on every render (renderTabContent)
+function avisoPa(r){
+  if(!esPaSmartsheet(r)) return null;
+  if(!idPaLimpio(r.caseId)) return 'PowerApps case without ID (still counts)';
+  if(!INDICE_PA_PANTALLA) INDICE_PA_PANTALLA = indicePa(allRecordsFull());
+  const e = INDICE_PA_PANTALLA.get(firmaPa(r));
+  if(e && e.excel.size && !e.excel.has(r.ownerKey)) return 'Same PowerApps ID also in the PA Excel under another person (still counts)';
+  return null;
+}
 
 /* ---------- Cambio 37: re-uploads that bring every month again ----------
    1. Comparison by day. The generic_case key carries the date as an ISO timestamp, and the same Excel date
@@ -1286,6 +1334,9 @@ async function handleFiles(fileList){
   const claimed = new Set(incoming.filter(r=>STORE[r.dedupKey]).map(r=>r.dedupKey));
   let matchedByDay = 0;
   const sheetRange = {}; // family||sheet -> {min, max} of the dates in the new version
+  // Cambio 40: PowerApps cases already saved (or staged) from the other source — PA Excel vs Other Projects Smartsheet
+  const paIdx = incoming.some(r=>origenPa(r)) ? indicePa(Object.values(STORE)) : new Map();
+  const paRepetidos = [];
   incoming.forEach(rec=>{
     if(rec.sourceType === 'generic_case' && !STORE[rec.dedupKey]){
       const a = genericKeyParts(rec.dedupKey);
@@ -1298,6 +1349,13 @@ async function handleFiles(fileList){
     }
     const fk = docFamily(rec.sourceFile)+'||'+rec.sourceSheet;
     if(rec.date){ const t = +rec.date, g = sheetRange[fk] || (sheetRange[fk] = {min:t, max:t}); if(t < g.min) g.min = t; if(t > g.max) g.max = t; }
+    // Cambio 40: a new row whose ID + project + person already came from the other source is the same case: not added
+    const oPa = origenPa(rec);
+    if(oPa && !STORE[rec.dedupKey] && !staged.has(rec.dedupKey)){
+      const e = paIdx.get(firmaPa(rec));
+      if(e && e[otroOrigenPa(oPa)].has(rec.ownerKey)){ paRepetidos.push(rec); return; }
+      agregarIndicePa(paIdx, rec);
+    }
 
     const stored = STORE[rec.dedupKey];
     const existing = stored || (staged.get(rec.dedupKey) || {}).rec;
@@ -1355,7 +1413,7 @@ async function handleFiles(fileList){
     if(supersededSample.length < 6) supersededSample.push({ id:r.caseId, type:r.originalType||r.workType, date:r.date, owner:r.ownerDisplay, project:r.project });
   });
   hideImportProgress();
-  pendingImport = { matchedByDay, supersededKeys, supersededSample, supersededByFile, staged: Array.from(staged.values()), qaStaged: Array.from(qaStaged.values()), fileSummaries, qualityIssues, unclassifiedGroups: Array.from(unclassifiedGroups.values()), qaSkippedOlder, supersededQaKeys: Array.from(supersededQaKeys) };
+  pendingImport = { paRepetidos, matchedByDay, supersededKeys, supersededSample, supersededByFile, staged: Array.from(staged.values()), qaStaged: Array.from(qaStaged.values()), fileSummaries, qualityIssues, unclassifiedGroups: Array.from(unclassifiedGroups.values()), qaSkippedOlder, supersededQaKeys: Array.from(supersededQaKeys) };
   renderImportPreview();
 }
 
@@ -1738,6 +1796,7 @@ function applyFilters(records){
     if(filters.person.length && !filters.person.includes(r.ownerKey)) return false;
     if(filters.workType.length && !filters.workType.includes(r.workType)) return false;
     if(filters.status!=='ALL' && (r.status||'Completed (inferred)')!==filters.status) return false;
+    if(filters.sonic && r.about !== 'Sonic') return false; // Cambio 40
     if(filters.from && r.date && r.date < filters.from) return false;
     if(filters.to && r.date && r.date > filters.to) return false;
     if((filters.hourFrom!==null || filters.hourTo!==null)){
@@ -2030,6 +2089,7 @@ function renderFilterBar(){
     ${multiSelectHtml('person', personLabel, people.map(p=>({value:p, label:peopleDisplay[p]})), quickPersonGroups(people))}
     ${multiSelectHtml('workType', workTypeLabel, workTypes.map(t=>({value:t, label:t})))}
     <select id="fStatus"><option value="ALL">Default status</option>${statuses.map(s=>`<option value="${esc(s)}" ${filters.status===s?'selected':''}>${esc(s)}</option>`).join('')}</select>
+    <select id="fSonic" title="About = Sonic (Other Projects)"><option value="">All cases</option><option value="1" ${filters.sonic?'selected':''}>Only Sonic</option></select>
     <input type="date" id="fFrom" value="${filters.from? filters.from.toISOString().slice(0,10):''}">
     <span class="muted" style="font-size:12px;">to</span>
     <input type="date" id="fTo" value="${filters.to? filters.to.toISOString().slice(0,10):''}">
@@ -2065,6 +2125,7 @@ function renderFilterBar(){
   });
 
   bar.querySelector('#fStatus').onchange = e=>{ filters.status=e.target.value; renderTabContent(); };
+  bar.querySelector('#fSonic').onchange = e=>{ filters.sonic = !!e.target.value; renderTabContent(); };
   bar.querySelector('#fFrom').onchange = e=>{ filters.from = e.target.value? new Date(e.target.value+'T00:00:00') : null; if(window.ensureDataFrom){ window.ensureDataFrom(filters.from); } else renderTabContent(); };
   bar.querySelector('#fTo').onchange = e=>{ filters.to = e.target.value? new Date(e.target.value+'T23:59:59') : null; renderTabContent(); };
   bar.querySelector('#fHourFrom').onchange = e=>{
@@ -2077,7 +2138,7 @@ function renderFilterBar(){
     const [h,m] = e.target.value.split(':').map(Number);
     filters.hourTo = h*60+m; renderTabContent();
   };
-  bar.querySelector('#fClear').onclick = ()=>{ filters = {project:[],system:[],person:[],workType:[],status:'ALL',from:(window.DEFAULT_FROM||null),to:null,hourFrom:null,hourTo:null}; renderFilterBar(); renderTabContent(); };
+  bar.querySelector('#fClear').onclick = ()=>{ filters = {project:[],system:[],person:[],workType:[],status:'ALL',sonic:false,from:(window.DEFAULT_FROM||null),to:null,hourFrom:null,hourTo:null}; renderFilterBar(); renderTabContent(); };
 }
 
 document.getElementById('tabs').addEventListener('click', e=>{
@@ -2090,6 +2151,7 @@ document.getElementById('tabs').addEventListener('click', e=>{
 });
 
 function renderTabContent(){
+  INDICE_PA_PANTALLA = null; // Cambio 40: data may have changed since the last render
   const container = document.getElementById('tabContent');
   const filtered = applyFilters(allRecords());
   // Team Coach: pestañas ocultas para este rol (ver los estilos de data-role / data-can-upload)
@@ -2121,6 +2183,7 @@ function renderResumen(filtered){
       if(filters.system.length && !filters.system.includes(r.system)) return false;
       if(filters.person.length && !filters.person.includes(r.ownerKey)) return false;
       if(filters.workType.length && !filters.workType.includes(r.workType)) return false;
+      if(filters.sonic && r.about !== 'Sonic') return false;
       if(!r.date || r.date<prev.from || r.date>prev.to) return false;
       if(filters.hourFrom!==null || filters.hourTo!==null){
         const mins = timeOfDayMinutes(r.date);
@@ -2153,6 +2216,7 @@ function renderResumen(filtered){
     if(filters.system.length && !filters.system.includes(r.system)) return false;
     if(filters.person.length && !filters.person.includes(r.ownerKey)) return false;
     if(filters.workType.length && !filters.workType.includes(r.workType)) return false;
+    if(filters.sonic && r.about !== 'Sonic') return false;
     return isCounted(r);
   }).filter(r=>r.date);
   const prevListForInsights = filters.from && filters.to ? (()=>{
@@ -2355,6 +2419,7 @@ function attentionProblems(r){
   }
   // Cambio 39: set by the database (27_perf_horas.sql); the hours keep counting until the row is fixed
   if(r.aviso && AVISOS_HORAS[r.aviso]) p.push(AVISOS_HORAS[r.aviso]);
+  const pa = avisoPa(r); if(pa) p.push(pa); // Cambio 40
   return p;
 }
 const AVISOS_HORAS = {
@@ -5350,6 +5415,9 @@ function renderImportPreview(){
           <strong>⚠ ${n.toLocaleString('en-US')} row(s) have no date</strong> — they will be saved but will not count in any month. Check the date column of the file before confirming.
           <div class="muted" style="margin-top:4px;">${Object.entries(by).sort((x,y)=>y[1]-x[1]).map(([f,c])=>esc(f)+': '+c.toLocaleString('en-US')).join(' · ')}</div></div>`;
       })()}
+      ${(pendingImport.paRepetidos||[]).length ? `<div id="paRepetidosNote" style="background:var(--info-bg, #eef3fb); border:1px solid var(--border,#ccd6e8); border-radius:8px; padding:10px 14px; margin-bottom:16px; font-size:12px;">
+        <strong>${pendingImport.paRepetidos.length.toLocaleString('en-US')} PowerApps row(s) not added</strong> — the same case (same ID, project and person) is already loaded from ${pendingImport.paRepetidos.some(r=>esPaSmartsheet(r)) ? 'the PA Excel' : 'the Other Projects Smartsheet'}, so it is not counted twice.
+        <div class="muted" style="margin-top:4px;">${pendingImport.paRepetidos.slice(0,6).map(r=>esc(String(r.caseId))+' · '+esc(r.ownerDisplay)+' · '+esc(r.originalType||r.workType)).join('<br>')}${pendingImport.paRepetidos.length>6?'<br>…':''}</div></div>` : ''}
       ${pendingImport.matchedByDay ? `<p class="muted" style="font-size:12px; margin:-8px 0 14px;">${pendingImport.matchedByDay.toLocaleString('en-US')} row(s) were recognized as cases already saved (same ID, type, day, person and LOE), so they are not added again.</p>` : ''}
 
       ${(nQaUpdated || nQaSuperseded || qaSkippedOlder) ? `
@@ -5456,6 +5524,7 @@ document.getElementById('exportPdfBtn').addEventListener('click', ()=>{
   if(filters.person.length) activeFilters.push(filters.person.length+' people selected');
   if(filters.workType.length) activeFilters.push('Types: '+filters.workType.join(', '));
   if(filters.status!=='ALL') activeFilters.push('Status: '+filters.status);
+  if(filters.sonic) activeFilters.push('Only Sonic');
   if(filters.from || filters.to) activeFilters.push('Date: '+(filters.from?filters.from.toISOString().slice(0,10):'…')+' to '+(filters.to?filters.to.toISOString().slice(0,10):'…'));
   const metaText = `${tabNames[currentTab]||currentTab} — Generated ${new Date().toLocaleString('en-US')}` + (activeFilters.length? ' — Filters: '+activeFilters.join(' · ') : ' — No filters applied');
   document.getElementById('printHeaderMeta').textContent = metaText;
@@ -5806,7 +5875,7 @@ function recToRow(r, personId){
     system: r.system || null, source_file: r.sourceFile || null,
     extra: { ownerKey: r.ownerKey, ownerDisplay: r.ownerDisplay, account: r.account ?? null, status: r.status ?? null,
              isQueue: !!r.isQueue, sourceType: r.sourceType, guid: r.guid ?? null, description: r.description ?? null,
-             url: r.url ?? null, originalType: r.originalType ?? null, deliverablesUsed: r.deliverablesUsed ?? null, sourceSheet: r.sourceSheet ?? null,
+             url: r.url ?? null, originalType: r.originalType ?? null, deliverablesUsed: r.deliverablesUsed ?? null, about: r.about ?? null, sourceSheet: r.sourceSheet ?? null,
              loadedAt: iso(r.loadedAt), caseIdIsNumber: typeof r.caseId === 'number' }
   };
 }
@@ -5837,7 +5906,7 @@ function rowToRec(w){
     loeManual: (w.loe_manual !== null && w.loe_manual !== undefined), loeOk: !!w.loe_ok,
     sourceFile: w.source_file, sourceSheet: x.sourceSheet, loadedAt: x.loadedAt ? new Date(x.loadedAt) : null,
     isQueue: !!x.isQueue, sourceType: x.sourceType, guid: x.guid ?? null, description: x.description ?? null,
-    url: x.url ?? null, originalType: x.originalType ?? null, deliverablesUsed: x.deliverablesUsed ?? null, importBatchId: w.import_batch_id || null, system: w.system,
+    url: x.url ?? null, originalType: x.originalType ?? null, deliverablesUsed: x.deliverablesUsed ?? null, about: x.about ?? null, importBatchId: w.import_batch_id || null, system: w.system,
     // Cambio 39: computed by the database (27_perf_horas.sql)
     categoria: w.categoria || undefined, ticket: w.ticket ?? null, horasRepetidasDe: w.horas_repetidas_de ?? null, aviso: w.aviso ?? null
   });
